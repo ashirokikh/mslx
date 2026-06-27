@@ -867,6 +867,20 @@ fn cert_sources_body_flat(
     s
 }
 
+/// Fetch text with a couple of immediate retries. The unit loop runs many concurrent fetches;
+/// raw.githubusercontent.com occasionally drops one under load, and a silent retry avoids a
+/// whole unit rendering as "Content could not be fetched" for a transient blip.
+async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String, crate::FetchError> {
+    let mut last = None;
+    for _ in 0..3 {
+        match fetcher.get_json(url).await {
+            Ok(s) => return Ok(s),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.expect("loop runs at least once"))
+}
+
 async fn assemble_unit<F: Fetcher>(
     fetcher: &F,
     index: &ContentIndex,
@@ -885,7 +899,7 @@ async fn assemble_unit<F: Fetcher>(
     match file {
         Some(file) => {
             let url = format!("{folder_raw_base}/includes/{file}");
-            let md = fetcher.get_json(&url).await?;
+            let md = get_text_retrying(fetcher, &url).await?;
             let stem = file.trim_end_matches(".md");
             let learn_url = format!("{}/{}", module_url.trim_end_matches('/'), stem);
             let body = markdown_to_xhtml_with_unit(&md, folder_raw_base, &learn_url);

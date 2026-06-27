@@ -80,9 +80,11 @@ fn preprocess(md: &str, media_base: &str, unit_url: &str) -> String {
             continue;
         }
 
-        // > [!VIDEO https://...]  ->  a plain video link paragraph.
+        // >[!VIDEO https://...]  ->  a plain video link paragraph (the space after `>` is
+        // optional in the source; Learn authors both `> [!VIDEO` and `>[!VIDEO`).
         if let Some(url) = trimmed
             .strip_prefix("> [!VIDEO ")
+            .or_else(|| trimmed.strip_prefix(">[!VIDEO "))
             .and_then(|s| s.strip_suffix(']'))
         {
             out.push_str(&video_link(url, unit_url));
@@ -90,8 +92,11 @@ fn preprocess(md: &str, media_base: &str, unit_url: &str) -> String {
         }
 
         // > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]  ->  bold label,
-        // keeping it a blockquote so the alert still reads as an aside.
-        if let Some(rest) = trimmed.strip_prefix("> [!") {
+        // keeping it a blockquote so the alert still reads as an aside (space after `>` optional).
+        if let Some(rest) = trimmed
+            .strip_prefix("> [!")
+            .or_else(|| trimmed.strip_prefix(">[!"))
+        {
             if let Some(end) = rest.find(']') {
                 let kind = &rest[..end];
                 let after = rest[end + 1..].trim();

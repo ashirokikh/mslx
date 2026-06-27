@@ -1056,9 +1056,16 @@ impl ContentIndex {
         let m = self.modules.get(module_slug)?;
         let exact = format!("{unit_slug}.md");
         let suffixed = format!("-{unit_slug}.md");
+        if let Some(f) = m.includes.iter().find(|f| **f == exact || f.ends_with(&suffixed)) {
+            return Some(f.as_str());
+        }
+        // The uid slug and the file slug sometimes differ by a stop-word or the number prefix
+        // (e.g. `describe-purpose-of-service-trust-portal` vs `6-describe-purpose-service-trust-portal.md`).
+        // Fall back to matching on content words only.
+        let want = normalize_slug(unit_slug);
         m.includes
             .iter()
-            .find(|f| **f == exact || f.ends_with(&suffixed))
+            .find(|f| normalize_slug(f.trim_end_matches(".md")) == want)
             .map(String::as_str)
     }
 
@@ -1111,6 +1118,20 @@ pub fn module_slug_from_url(url: &str) -> Option<String> {
 /// The unit slug (last dotted segment) of a unit uid.
 pub fn unit_slug_from_uid(uid: &str) -> &str {
     uid.rsplit('.').next().unwrap_or(uid)
+}
+
+/// Reduce a unit/file slug to its content words: drop a leading number prefix (`6-`, `7a-`),
+/// hyphens, and common stop-words, so uid slugs and file slugs that differ only by those
+/// still match (e.g. `describe-purpose-of-service-trust-portal` vs the file
+/// `6-describe-purpose-service-trust-portal.md`).
+fn normalize_slug(s: &str) -> String {
+    const STOP: &[&str] = &["of", "the", "a", "an", "to", "and", "for", "in", "with", "on"];
+    s.split('-')
+        .filter(|w| {
+            !w.is_empty() && !STOP.contains(w) && !w.chars().next().unwrap().is_ascii_digit()
+        })
+        .collect::<Vec<_>>()
+        .concat()
 }
 
 /// Load and parse the content index via a [`Fetcher`].

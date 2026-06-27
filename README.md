@@ -1,5 +1,7 @@
 # mslx
 
+**Microsoft Learn Exporter to EPUB.**
+
 Turn a Microsoft Learn certification, exam, or learning path into a single, well-structured
 EPUB study book for offline reading: paths become chapters, modules and units become sections,
 knowledge-check questions are rendered for self-testing, and a sources appendix cites every

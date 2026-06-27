@@ -7,7 +7,8 @@
 //! unchanged here - we only swap the native reqwest `Fetcher` for one backed by `fetch`.
 
 use mslx_core::{
-    assemble::build_certification_epub, load_content_index, FetchError, Fetcher, ResolveError,
+    assemble::build_certification_epub, fetch_prebuilt_index, load_content_index, FetchError,
+    Fetcher, ResolveError,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -101,10 +102,15 @@ pub async fn export_book(
     let progress = |msg: &str| {
         let _ = on_progress.call1(&JsValue::NULL, &JsValue::from_str(msg));
     };
-    progress("Loading the Microsoft Learn catalog\u{2026}");
-    let index = load_content_index(&fetcher)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    progress("Building the Learn index\u{2026}");
+    // Primary path: the prebuilt complete index served by the app (same source the CLI uses).
+    // Fall back to the live GitHub tree only if that endpoint is unavailable.
+    let index = match fetch_prebuilt_index(&fetcher, "/api/content-index").await {
+        Ok(idx) => idx,
+        Err(_) => load_content_index(&fetcher)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?,
+    };
     progress("Resolving the certification\u{2026}");
     let bytes = build_certification_epub(&fetcher, &index, &input, &locale, &date_stamp, &progress)
         .await

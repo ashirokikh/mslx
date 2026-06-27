@@ -1115,6 +1115,22 @@ pub async fn load_content_index<F: Fetcher>(fetcher: &F) -> Result<ContentIndex,
     Ok(build_content_index(&json)?)
 }
 
+/// Fetch the prebuilt COMPLETE index from `url` (the mslx web app's `/api/content-index`) and
+/// deserialize it. This is the shared, primary index path for both the browser and the CLI, so
+/// they use one complete index instead of each walking GitHub (rate-limited, and truncated via
+/// the single recursive tree). Callers fall back to building locally if this fails.
+pub async fn fetch_prebuilt_index<F: Fetcher>(
+    fetcher: &F,
+    url: &str,
+) -> Result<ContentIndex, ResolveError> {
+    let json = fetcher
+        .get_json(url)
+        .await
+        .map_err(|e| ResolveError::BadInput(format!("prebuilt index fetch failed: {}", e.message)))?;
+    serde_json::from_str::<ContentIndex>(&json)
+        .map_err(|e| ResolveError::BadInput(format!("prebuilt index parse failed: {e}")))
+}
+
 /// Resolve a unit uid to its markdown and fetch it.
 pub async fn fetch_unit_markdown<F: Fetcher>(
     fetcher: &F,

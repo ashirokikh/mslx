@@ -32,7 +32,30 @@ pub fn markdown_to_xhtml_with_unit(md: &str, media_base: &str, unit_url: &str) -
     let parser = Parser::new_ext(&pre, opts);
     let mut html_out = String::new();
     html::push_html(&mut html_out, parser);
-    xhtmlify(&html_out)
+    strip_code_lang_classes(&xhtmlify(&html_out))
+}
+
+/// Remove `class="language-..."` from fenced code blocks so readers do not syntax-highlight
+/// them (which adds a reader-specific background and colored keywords). The block keeps the
+/// plain background from our stylesheet and renders as uniform monospace text, matching the
+/// inline-code treatment. Inline code carries no language class, so it is untouched.
+fn strip_code_lang_classes(html: &str) -> String {
+    let needle = " class=\"language-";
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(pos) = rest.find(needle) {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos + needle.len()..];
+        match tail.find('"') {
+            Some(q) => rest = &tail[q + 1..],
+            None => {
+                rest = tail;
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Build the markdown for a video reference. Prefer the unit's Learn page (`unit_url`, which

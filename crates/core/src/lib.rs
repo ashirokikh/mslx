@@ -1082,6 +1082,31 @@ impl ContentIndex {
             .map(String::as_str)
     }
 
+    /// Last-resort match by position: the `content_ordinal`-th content include (sorted by file
+    /// number, excluding the knowledge-check markdown) for a unit that is the `content_ordinal`-th
+    /// non-knowledge-check unit in its module. Only trusted when the content include count equals
+    /// `non_kc_count`, so a 1:1 unit<->file mapping is structurally guaranteed and we never show
+    /// the wrong unit's content. Handles exercise units (file `7a-exercise.md` vs uid
+    /// `exercise-ai-agent`) and modules whose numbering has gaps.
+    pub fn unit_include_file_by_ordinal(
+        &self,
+        module_slug: &str,
+        content_ordinal: usize,
+        non_kc_count: usize,
+    ) -> Option<&str> {
+        let m = self.modules.get(module_slug)?;
+        let mut content: Vec<&String> = m
+            .includes
+            .iter()
+            .filter(|f| !f.ends_with("knowledge-check.md"))
+            .collect();
+        if content.is_empty() || content.len() != non_kc_count {
+            return None;
+        }
+        content.sort_by_key(|f| include_sort_key(f));
+        content.get(content_ordinal.checked_sub(1)?).map(|s| s.as_str())
+    }
+
     /// Resolve a unit's prose markdown raw URL.
     pub fn unit_markdown_url(&self, module_slug: &str, unit_slug: &str) -> Option<String> {
         let m = self.modules.get(module_slug)?;
@@ -1132,6 +1157,13 @@ fn normalize_slug(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .concat()
+}
+
+/// Sort key for include files by leading file number (1, 3, 7, 7a, ...): the numeric prefix,
+/// then the full name so `7-agents.md` sorts before `7a-exercise.md`.
+fn include_sort_key(f: &str) -> (u32, &str) {
+    let digits: String = f.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (digits.parse().unwrap_or(0), f)
 }
 
 /// Load and parse the content index via a [`Fetcher`].

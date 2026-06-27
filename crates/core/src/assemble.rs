@@ -218,6 +218,10 @@ struct UnitTask {
     base: Option<String>,
     module_url: String,
     position: usize,
+    // 1-based index among the module's non-knowledge-check units, and that count, for the
+    // ordinal include fallback.
+    content_ordinal: usize,
+    non_kc_count: usize,
 }
 
 /// Build an EPUB (bytes) for a single module identified by its uid.
@@ -255,13 +259,19 @@ pub async fn build_module_epub<F: Fetcher + Sync>(
     });
 
     // 2. Units in order.
+    let non_kc_count = module.units.iter().filter(|u| !u.is_knowledge_check).count();
+    let mut content_ordinal = 0;
     for (i, unit) in module.units.iter().enumerate() {
         let n = i + 1;
         let (body, learn_url, raw_url) = if unit.is_knowledge_check {
             assemble_quiz(fetcher, index, &slug, &folder_raw_base, &module_url).await?
         } else {
-            assemble_unit(fetcher, index, &slug, &folder_raw_base, &module_url, &unit.uid, n)
-                .await?
+            content_ordinal += 1;
+            assemble_unit(
+                fetcher, index, &slug, &folder_raw_base, &module_url, &unit.uid, n,
+                content_ordinal, non_kc_count,
+            )
+            .await?
         };
 
         sources.push(SourceRef {
@@ -380,10 +390,15 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
 
             let mut module_nav = NavEntry::leaf(part_file.clone(), module.title.clone());
             let mut first_unit_file: Option<String> = None;
+            let non_kc_count = module.units.iter().filter(|u| !u.is_knowledge_check).count();
+            let mut content_ordinal = 0;
 
             for (ui, unit) in module.units.iter().enumerate() {
                 gidx += 1;
                 let file = format!("u{gidx:04}.xhtml");
+                if !unit.is_knowledge_check {
+                    content_ordinal += 1;
+                }
                 tasks.push(UnitTask {
                     gidx,
                     is_kc: unit.is_knowledge_check,
@@ -392,6 +407,8 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
                     base: base.clone(),
                     module_url: module_url.clone(),
                     position: ui + 1,
+                    content_ordinal,
+                    non_kc_count,
                 });
                 source_slots.push((gidx, module.title.clone(), unit.title.clone()));
                 module_nav
@@ -445,6 +462,7 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
                     } else {
                         assemble_unit(
                             fetcher, index, slug, base, &t.module_url, &t.unit_uid, t.position,
+                            t.content_ordinal, t.non_kc_count,
                         )
                         .await
                     };
@@ -516,17 +534,32 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     )
     .map_err(|e| ResolveError::BadInput(format!("epub packaging failed: {e}")))?;
 
-    // Report which modules had no public source, marker-prefixed so the page intercepts it
-    // from the progress stream (for a warning + telemetry) rather than displaying it.
+    // Report which modules had no public source and which individual units rendered a
+    // placeholder (no match / fetch failed), marker-prefixed so the page intercepts it from the
+    // progress stream (for a warning + telemetry) rather than displaying it.
     let missing_json = missing_modules
         .iter()
         .map(|m| format!("\"{}\"", json_escape(m)))
         .collect::<Vec<_>>()
         .join(",");
+    let unit_placeholders: Vec<String> = source_slots
+        .iter()
+        .filter_map(|(g, module, unit)| {
+            let (body, _, _) = results.get(g)?;
+            (body.contains("could not be fetched") || body.contains("not available for this unit"))
+                .then(|| format!("{module} / {unit}"))
+        })
+        .collect();
+    let placeholders_json = unit_placeholders
+        .iter()
+        .map(|p| format!("\"{}\"", json_escape(p)))
+        .collect::<Vec<_>>()
+        .join(",");
     progress(&format!(
-        "__MSLX_REPORT__{{\"resolved\":\"{}\",\"missing\":[{}]}}",
+        "__MSLX_REPORT__{{\"resolved\":\"{}\",\"missing\":[{}],\"unitPlaceholders\":[{}]}}",
         json_escape(&book.title),
-        missing_json
+        missing_json,
+        placeholders_json
     ));
 
     Ok(bytes)
@@ -889,13 +922,17 @@ async fn assemble_unit<F: Fetcher>(
     module_url: &str,
     unit_uid: &str,
     position: usize,
+    content_ordinal: usize,
+    non_kc_count: usize,
 ) -> Result<(String, String, String), ResolveError> {
     let unit_slug = unit_slug_from_uid(unit_uid);
-    // Primary: match by uid slug. Fallback: the file numbered `position` (handles units
-    // whose uid slug differs from the file slug).
+    // Primary: match by uid slug. Fallbacks for units whose uid slug differs from the file
+    // slug: the file numbered `position`, then the content-ordinal mapping (Nth non-KC unit ->
+    // Nth content file) which also survives numbering gaps and generic file names.
     let file = index
         .unit_include_file(slug, unit_slug)
-        .or_else(|| index.unit_include_file_by_number(slug, position));
+        .or_else(|| index.unit_include_file_by_number(slug, position))
+        .or_else(|| index.unit_include_file_by_ordinal(slug, content_ordinal, non_kc_count));
     match file {
         Some(file) => {
             let url = format!("{folder_raw_base}/includes/{file}");

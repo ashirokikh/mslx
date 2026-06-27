@@ -225,9 +225,13 @@ pub struct UnitNode {
 
 impl UnitNode {
     fn from_raw(r: RawUnit) -> Self {
-        let is_kc = r.uid.ends_with(".knowledge-check")
-            || r.uid.ends_with(".module-assessment")
-            || r.title.to_lowercase().contains("knowledge check");
+        // Knowledge-check units come as `<module>.knowledge-check` or `<module>.N-knowledge-check`,
+        // and Microsoft now titles them "Module assessment" (uid often still `N-knowledge-check`).
+        let title_l = r.title.to_lowercase();
+        let is_kc = r.uid.ends_with("knowledge-check")
+            || r.uid.ends_with("module-assessment")
+            || title_l.contains("knowledge check")
+            || title_l.contains("module assessment");
         UnitNode {
             uid: r.uid,
             title: r.title,
@@ -798,7 +802,7 @@ fn placeholder_unit(uuid: &str) -> Option<UnitNode> {
         uid: uuid.to_string(),
         title,
         duration_in_minutes: None,
-        is_knowledge_check: uuid.ends_with(".knowledge-check"),
+        is_knowledge_check: uuid.ends_with("knowledge-check") || uuid.ends_with("module-assessment"),
     })
 }
 

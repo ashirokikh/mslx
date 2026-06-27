@@ -102,7 +102,25 @@ struct RawCourse {
     #[serde(default)]
     icon_url: Option<String>,
     #[serde(default)]
+    levels: Vec<String>,
+    #[serde(default)]
     study_guide: Vec<StudyItem>,
+}
+
+/// The Microsoft certification badge for a difficulty level. Catalog cert badges are just the
+/// generic level badge (beginner -> fundamentals, intermediate -> associate, advanced ->
+/// expert), so an exam with no linked cert can still show the same badge its cert page does
+/// instead of the generic course icon.
+fn cert_level_badge(levels: &[String]) -> Option<String> {
+    let level = match levels.first().map(String::as_str) {
+        Some("beginner") => "fundamentals",
+        Some("intermediate") => "associate",
+        Some("advanced") => "expert",
+        _ => return None,
+    };
+    Some(format!(
+        "https://learn.microsoft.com/en-us/media/learn/certification/badges/microsoft-certified-{level}-badge.svg"
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -640,7 +658,10 @@ async fn course_study_guide<F: Fetcher>(
             if let Some(course) = resp.courses.into_iter().find(|c| c.uid == uid) {
                 let paths = study_guide_paths(&course.study_guide);
                 if !paths.is_empty() {
-                    return (paths, course.title, course.icon_url);
+                    // Prefer the certification level badge (what the cert page shows) over the
+                    // generic course icon.
+                    let badge = cert_level_badge(&course.levels).or(course.icon_url);
+                    return (paths, course.title, badge);
                 }
             }
         }

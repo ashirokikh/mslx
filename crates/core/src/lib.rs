@@ -576,6 +576,21 @@ async fn cert_icon_for_exam<F: Fetcher>(
         .find_map(|c| c.icon_url)
 }
 
+/// Find the certification that owns `exam_uid` and return (its title, its study-guide path
+/// uids). Some restructured exams (e.g. AI-900) keep the study guide on the certification
+/// rather than the exam or an instructor-led course, so the exam entry is blank.
+async fn cert_study_guide_for_exam<F: Fetcher>(
+    fetcher: &F,
+    exam_uid: &str,
+    locale: &str,
+) -> Option<(String, Vec<String>)> {
+    let resp = fetch_chunk(fetcher, "certifications", &[], locale).await.ok()?;
+    resp.certifications
+        .into_iter()
+        .find(|c| c.exams.iter().any(|e| e == exam_uid))
+        .map(|c| (c.title, study_guide_paths(&c.study_guide)))
+}
+
 /// Resolve an exam to a study guide: prefer its own study_guide, else match learning paths
 /// by the exam-code title prefix (e.g. `AZ-104:`).
 async fn resolve_exam<F: Fetcher>(
@@ -627,7 +642,25 @@ async fn resolve_exam<F: Fetcher>(
         });
     }
 
-    // Fallback 2: title-prefix match against all learning paths.
+    // Fallback 2: some restructured exams (AI-900) keep their study guide on the owning
+    // certification rather than the exam or a course.
+    if let Some((cert_title, cert_paths)) = cert_study_guide_for_exam(fetcher, exam_uid, locale).await
+    {
+        if !cert_paths.is_empty() {
+            let title = exam
+                .as_ref()
+                .and_then(|e| e.title.clone())
+                .unwrap_or(cert_title);
+            return Ok(StudyGuide {
+                title,
+                identifier: exam_uid.to_string(),
+                icon_url: icon_url.clone(),
+                path_uids: cert_paths,
+            });
+        }
+    }
+
+    // Fallback 3: title-prefix match against all learning paths.
     let code = exam_code_label(exam_uid);
     let paths = learning_paths_by_prefix(fetcher, &code, locale).await?;
     // Prefer the exam's title; for a single matched path use that path's name; else generic.

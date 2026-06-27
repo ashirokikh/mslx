@@ -1,0 +1,7 @@
+/target/
+node_modules/
+dist/
+.cache/
+*.epub
+*.pdf
+.DS_Store

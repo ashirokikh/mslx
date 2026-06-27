@@ -1,0 +1,20 @@
+[package]
+name = "mslx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line tool to export Microsoft Learn certifications, exams, and paths to EPUB study books."
+
+[[bin]]
+name = "mslx"
+path = "src/main.rs"
+
+[dependencies]
+mslx-core = { path = "../core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+async-trait = "0.1"
+anyhow = "1"
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

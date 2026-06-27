@@ -1,0 +1,18 @@
+[package]
+name = "mslx-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "mslx engine - IO-agnostic Microsoft Learn to EPUB resolution and assembly. Compiles to native and wasm."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+futures = "0.3"
+async-trait = "0.1"
+thiserror = "2"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+resvg = "0.44"

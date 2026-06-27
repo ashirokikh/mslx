@@ -51,9 +51,7 @@ h1, h2, h3 { font-family: sans-serif; line-height: 1.2; }
 .module-name { border-top: 2px solid #b9c6cf; padding-top: 0.4em; color: #0b3d5c; }
 .module-name + h2 { margin-top: 0.2em; color: #345; font-weight: normal; }
 code, pre { font-family: monospace; }
-code { font-size: 0.9em; background: #eef0f2; color: #1b1f23; padding: 0.1em 0.35em; border-radius: 3px; }
-pre { white-space: pre-wrap; overflow-wrap: break-word; background: #f6f8fa; color: #1b1f23; border: 1px solid #d8dee4; border-radius: 6px; padding: 0.7em 0.9em; font-size: 0.85em; line-height: 1.45; overflow-x: auto; }
-pre code { background: none; color: inherit; padding: 0; border-radius: 0; font-size: inherit; }
+pre { white-space: pre-wrap; background: #f4f4f4; padding: 0.6em; }
 blockquote { border-left: 3px solid #bbb; margin: 1em 0; padding: 0.2em 1em; color: #333; }
 table { border-collapse: collapse; margin: 0.8em 0; font-size: 0.95em; }
 th, td { border: 1px solid #d8dee4; padding: 0.4em 0.7em; text-align: left; }

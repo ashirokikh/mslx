@@ -340,6 +340,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn video_directive_without_space_renders_link() {
+        let out = markdown_to_xhtml_with_unit(
+            ">[!VIDEO https://learn-video.azurefd.net/vod/player?id=abc]",
+            "https://raw/base",
+            "https://learn/unit",
+        );
+        assert!(out.contains("Watch video on Microsoft Learn"), "got: {out}");
+        assert!(!out.contains("[!VIDEO"), "got: {out}");
+    }
+
+    #[test]
+    fn div_layout_directive_is_dropped_image_kept() {
+        let out = markdown_to_xhtml_with_unit(
+            ">[!div class=\"mx-imgborder\"]\n>![Diagram](../media/x.png)",
+            "https://raw/base/includes",
+            "https://learn/unit",
+        );
+        assert!(!out.contains("mx-imgborder"), "got: {out}");
+        assert!(!out.to_lowercase().contains("div class"), "got: {out}");
+        assert!(out.contains("<img"), "image should still render, got: {out}");
+    }
+
+    #[test]
+    fn real_alert_directive_still_renders_label() {
+        let out = markdown_to_xhtml_with_unit(
+            "> [!NOTE]\n> Something to note.",
+            "https://raw/base",
+            "https://learn/unit",
+        );
+        assert!(out.contains("Note"), "got: {out}");
+    }
+
+    #[test]
     fn converts_basic_markdown() {
         let x = markdown_to_xhtml("# Hi\n\nSome **bold** text.", "https://x/mod");
         assert!(x.contains("<h1>Hi</h1>"));

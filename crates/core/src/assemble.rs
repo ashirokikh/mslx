@@ -42,13 +42,12 @@ async fn embed_images<F: Fetcher + Sync>(fetcher: &F, chapters: &mut [Chapter]) 
         stream::iter(order.into_iter().enumerate())
             .map(|(i, url)| async move {
                 let asset = if is_svg_url(&url) {
-                    match fetcher.get_json(&url).await {
+                    match get_text_retrying(fetcher, &url).await {
                         Ok(svg) => rasterize_svg(&svg).map(|png| ("png".to_string(), png)),
                         Err(_) => None,
                     }
                 } else {
-                    fetcher
-                        .get_bytes(&url)
+                    get_bytes_retrying(fetcher, &url)
                         .await
                         .ok()
                         .map(|b| (ext_from_url(&url), b))
@@ -922,6 +921,19 @@ async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String,
     Err(last.expect("loop runs at least once"))
 }
 
+/// Same as [`get_text_retrying`] for binary assets. A dropped image fetch otherwise leaves the
+/// `<img>` pointing at the remote URL, which fails offline (the whole point of the export).
+async fn get_bytes_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<Vec<u8>, crate::FetchError> {
+    let mut last = None;
+    for _ in 0..3 {
+        match fetcher.get_bytes(url).await {
+            Ok(b) => return Ok(b),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.expect("loop runs at least once"))
+}
+
 async fn assemble_unit<F: Fetcher>(
     fetcher: &F,
     index: &ContentIndex,
@@ -1097,4 +1109,28 @@ fn sources_body(
     }
     s.push_str("</ol>\n");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Book;
+
+    fn book(id: &str) -> Book {
+        Book {
+            cert_uid: id.into(),
+            title: "Title".into(),
+            icon_url: None,
+            parts: vec![],
+        }
+    }
+
+    #[test]
+    fn cover_label_reflects_resolved_type() {
+        assert!(cover_body(&book("certification.azure-fundamentals"), "2026-01-01")
+            .contains("Certification:"));
+        assert!(cover_body(&book("exam.ai-900"), "2026-01-01").contains("Exam:"));
+        assert!(cover_body(&book("learn.wwl.well-architected"), "2026-01-01")
+            .contains("Learning path:"));
+    }
 }

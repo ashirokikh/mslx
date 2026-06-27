@@ -1241,6 +1241,99 @@ pub async fn fetch_unit_markdown<F: Fetcher>(
 mod tests {
     use super::*;
 
+    fn idx_with(slug: &str, includes: &[&str]) -> ContentIndex {
+        let mut modules = std::collections::HashMap::new();
+        modules.insert(
+            slug.to_string(),
+            ModuleFiles {
+                folder: format!("learn-pr/wwl-azure/{slug}"),
+                includes: includes.iter().map(|s| s.to_string()).collect(),
+                units_yml: vec![],
+            },
+        );
+        ContentIndex { modules, truncated: false }
+    }
+
+    fn unit(uid: &str, title: &str) -> UnitNode {
+        UnitNode::from_raw(RawUnit {
+            uid: uid.into(),
+            title: title.into(),
+            duration_in_minutes: None,
+        })
+    }
+
+    #[test]
+    fn kc_detection_handles_module_assessment_and_numbered() {
+        // "Module assessment" title with a number-prefixed uid (current Microsoft naming).
+        assert!(
+            unit(
+                "learn.azure.create-resource-manager-template-vs-code.6-knowledge-check",
+                "Module assessment",
+            )
+            .is_knowledge_check
+        );
+        // Classic "Knowledge check".
+        assert!(unit("learn.wwl.x.knowledge-check", "Knowledge check").is_knowledge_check);
+        // A normal content unit is not a KC.
+        assert!(!unit("learn.wwl.x.2-users", "Users").is_knowledge_check);
+    }
+
+    #[test]
+    fn unit_include_file_matches_suffix_and_normalized() {
+        let idx = idx_with(
+            "m",
+            &["1-introduction.md", "6-describe-purpose-service-trust-portal.md"],
+        );
+        // number-prefix suffix match
+        assert_eq!(idx.unit_include_file("m", "introduction"), Some("1-introduction.md"));
+        // normalized match: uid slug has the stop-word "of", the file does not
+        assert_eq!(
+            idx.unit_include_file("m", "describe-purpose-of-service-trust-portal"),
+            Some("6-describe-purpose-service-trust-portal.md"),
+        );
+    }
+
+    #[test]
+    fn unit_include_file_by_ordinal_maps_exercise_with_count_guard() {
+        // fundamentals-generative-ai shape: numbering gaps + a `7a-` file, no knowledge-check md.
+        let idx = idx_with(
+            "g",
+            &[
+                "1-introduction.md",
+                "3-language-models.md",
+                "6-writing-prompts.md",
+                "7-agents.md",
+                "7a-exercise.md",
+                "9-summary.md",
+            ],
+        );
+        // No name match for the exercise unit (uid slug `exercise-ai-agent` vs file `7a-exercise`).
+        assert_eq!(idx.unit_include_file("g", "exercise-ai-agent"), None);
+        // It is the 5th of 6 non-KC units -> the 5th content file.
+        assert_eq!(idx.unit_include_file_by_ordinal("g", 5, 6), Some("7a-exercise.md"));
+        // Count guard: a mismatched unit count must not map (never show the wrong unit).
+        assert_eq!(idx.unit_include_file_by_ordinal("g", 5, 7), None);
+    }
+
+    #[test]
+    fn normalize_slug_drops_stopwords_and_number_prefix() {
+        assert_eq!(
+            normalize_slug("describe-purpose-of-service-trust-portal"),
+            normalize_slug("6-describe-purpose-service-trust-portal"),
+        );
+        assert_eq!(normalize_slug("7a-exercise"), "exercise");
+    }
+
+    #[test]
+    fn include_sort_key_orders_numeric_then_letter_suffix() {
+        let mut v = vec!["9-summary.md", "7a-exercise.md", "7-agents.md", "1-introduction.md"];
+        v.sort_by_key(|f| include_sort_key(f));
+        assert_eq!(
+            v,
+            vec!["1-introduction.md", "7-agents.md", "7a-exercise.md", "9-summary.md"],
+        );
+    }
+
     #[test]
     fn parses_cert_url() {
         assert_eq!(

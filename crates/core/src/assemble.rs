@@ -912,7 +912,13 @@ fn cert_sources_body_flat(
 /// whole unit rendering as "Content could not be fetched" for a transient blip.
 async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String, crate::FetchError> {
     let mut last = None;
-    for _ in 0..3 {
+    for attempt in 0..4 {
+        // Back off before every retry (200ms, 400ms, 800ms). Immediate retries were useless
+        // against a brief GitHub-raw rate-limit/reset under the concurrent fetch burst - all
+        // three fired in the same instant and failed together, leaving a placeholder unit.
+        if attempt > 0 {
+            fetcher.sleep_ms(200u64 << (attempt - 1)).await;
+        }
         match fetcher.get_json(url).await {
             Ok(s) => return Ok(s),
             Err(e) => last = Some(e),
@@ -925,7 +931,10 @@ async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String,
 /// `<img>` pointing at the remote URL, which fails offline (the whole point of the export).
 async fn get_bytes_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<Vec<u8>, crate::FetchError> {
     let mut last = None;
-    for _ in 0..3 {
+    for attempt in 0..4 {
+        if attempt > 0 {
+            fetcher.sleep_ms(200u64 << (attempt - 1)).await;
+        }
         match fetcher.get_bytes(url).await {
             Ok(b) => return Ok(b),
             Err(e) => last = Some(e),
@@ -1132,5 +1141,56 @@ mod tests {
         assert!(cover_body(&book("exam.ai-900"), "2026-01-01").contains("Exam:"));
         assert!(cover_body(&book("learn.wwl.well-architected"), "2026-01-01")
             .contains("Learning path:"));
+    }
+
+    // A Fetcher that fails its first `fail_n` get_json calls then succeeds, recording every
+    // backoff sleep. Atomics/Mutex keep the futures Send (the native trait bound requires it).
+    struct FlakyFetcher {
+        remaining_failures: std::sync::atomic::AtomicUsize,
+        sleeps: std::sync::Mutex<Vec<u64>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Fetcher for FlakyFetcher {
+        async fn get_json(&self, url: &str) -> Result<String, crate::FetchError> {
+            use std::sync::atomic::Ordering;
+            if self.remaining_failures.load(Ordering::SeqCst) > 0 {
+                self.remaining_failures.fetch_sub(1, Ordering::SeqCst);
+                return Err(crate::FetchError { url: url.into(), message: "flaky".into() });
+            }
+            Ok("body".into())
+        }
+        async fn get_bytes(&self, _url: &str) -> Result<Vec<u8>, crate::FetchError> {
+            Ok(vec![])
+        }
+        async fn sleep_ms(&self, ms: u64) {
+            self.sleeps.lock().unwrap().push(ms);
+        }
+    }
+
+    #[test]
+    fn retry_recovers_with_exponential_backoff() {
+        // Two transient failures then success: the helper must return Ok and have slept twice
+        // with growing delays (200ms, 400ms) - the SC-900 "could not be fetched" placeholders
+        // were these same transient bursts, where zero-delay retries all failed together.
+        let f = FlakyFetcher {
+            remaining_failures: std::sync::atomic::AtomicUsize::new(2),
+            sleeps: std::sync::Mutex::new(vec![]),
+        };
+        let r = futures::executor::block_on(get_text_retrying(&f, "https://example/x.md"));
+        assert_eq!(r.unwrap(), "body");
+        assert_eq!(*f.sleeps.lock().unwrap(), vec![200, 400]);
+    }
+
+    #[test]
+    fn retry_gives_up_after_four_attempts() {
+        // Never-succeeding: 4 attempts -> 3 backoff sleeps (200, 400, 800), then Err.
+        let f = FlakyFetcher {
+            remaining_failures: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            sleeps: std::sync::Mutex::new(vec![]),
+        };
+        let r = futures::executor::block_on(get_text_retrying(&f, "https://example/x.md"));
+        assert!(r.is_err());
+        assert_eq!(*f.sleeps.lock().unwrap(), vec![200, 400, 800]);
     }
 }

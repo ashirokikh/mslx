@@ -31,6 +31,25 @@ impl Fetcher for BrowserFetcher {
             .await
             .map_err(|message| FetchError { url: url.to_string(), message })
     }
+
+    async fn sleep_ms(&self, ms: u64) {
+        sleep(ms).await;
+    }
+}
+
+/// Resolve after `ms` milliseconds via the browser's `setTimeout`, awaited as a future. Used
+/// for retry backoff; if there is no `window` (which should not happen for our use) it returns
+/// immediately rather than blocking.
+async fn sleep(ms: u64) {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                &resolve,
+                ms as i32,
+            );
+        }
+    });
+    let _ = JsFuture::from(promise).await;
 }
 
 /// One raw `fetch` (defaults to GET). Returns the `Response` regardless of status; only a

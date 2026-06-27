@@ -62,6 +62,10 @@ pub trait Fetcher {
     async fn get_json(&self, url: &str) -> Result<String, FetchError>;
     /// Fetch raw bytes (for binary assets like images).
     async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, FetchError>;
+    /// Pause for `ms` milliseconds. Used for backoff between fetch retries; platform-specific
+    /// (a tokio timer natively, `setTimeout` in the browser) because core has no runtime of its
+    /// own. A no-op sleep would make the retry loop hammer a transient rate-limit window.
+    async fn sleep_ms(&self, ms: u64);
 }
 
 #[derive(Debug, Error)]

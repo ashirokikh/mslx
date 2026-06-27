@@ -52,6 +52,10 @@ impl Fetcher for ReqwestFetcher {
             .map(|b| b.to_vec())
             .map_err(|e| mkerr(e.to_string()))
     }
+
+    async fn sleep_ms(&self, ms: u64) {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
 }
 
 #[tokio::main]

@@ -100,11 +100,19 @@ fn preprocess(md: &str, media_base: &str, unit_url: &str) -> String {
             if let Some(end) = rest.find(']') {
                 let kind = &rest[..end];
                 let after = rest[end + 1..].trim();
-                out.push_str(&format!("> **{}**", title_case(kind)));
-                if !after.is_empty() {
-                    out.push_str(&format!(" {after}"));
+                let directive = kind.split_whitespace().next().unwrap_or("").to_lowercase();
+                const ALERTS: &[&str] = &["note", "tip", "important", "warning", "caution"];
+                if ALERTS.contains(&directive.as_str()) {
+                    out.push_str(&format!("> **{}**", title_case(kind)));
+                    if !after.is_empty() {
+                        out.push_str(&format!(" {after}"));
+                    }
+                    out.push('\n');
+                } else if !after.is_empty() {
+                    // Layout directive (e.g. `[!div class="mx-imgborder"]`): drop the wrapper,
+                    // keep any inline content. The wrapped image/text renders on its own.
+                    out.push_str(&format!("> {after}\n"));
                 }
-                out.push('\n');
                 continue;
             }
         }

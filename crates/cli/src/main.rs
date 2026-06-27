@@ -213,19 +213,7 @@ async fn load_index(fetcher: &ReqwestFetcher) -> anyhow::Result<ContentIndex> {
         }
     }
 
-    // Primary path (shared with the browser): fetch the prebuilt complete index from the mslx
-    // app. Falls through to building locally if it is unavailable.
-    let url = std::env::var("MSLX_INDEX_URL")
-        .unwrap_or_else(|_| "https://mslx.ashirokikh.com/api/content-index".to_string());
-    if let Ok(idx) = mslx_core::fetch_prebuilt_index(fetcher, &url).await {
-        eprintln!("(fetched prebuilt index from {url})");
-        if let Ok(s) = serde_json::to_string(&idx) {
-            let _ = std::fs::write(&cache, s);
-        }
-        return Ok(idx);
-    }
-
-    eprintln!("(prebuilt index unavailable; building locally from learn-pr group subtrees)...");
+    eprintln!("(building content index from learn-pr group subtrees, one-time)...");
     // root -> learn-pr sha
     let root: serde_json::Value = serde_json::from_str(&fetcher.get_json(&format!("{TREE_API}/main")).await?)?;
     let lp_sha = subtree_sha(&root, "learn-pr")

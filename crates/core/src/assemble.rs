@@ -821,11 +821,19 @@ New-AzResourceGroup -Name "vmbackups" -Location "westus2"
 "##;
 
 fn cover_body(book: &Book, date_stamp: &str) -> String {
+    // Label the cover by what was actually resolved (the identifier prefix encodes the type).
+    let kind = if book.cert_uid.starts_with("exam.") {
+        "Exam"
+    } else if book.cert_uid.starts_with("certification.") {
+        "Certification"
+    } else {
+        "Learning path"
+    };
     badge_img(&book.icon_url)
         + &format!(
         "<p class=\"muted\">Microsoft Learn study export, assembled {date} for personal study. \
          Content is Microsoft's; original sources are listed at the end.</p>\n\
-         <p><strong>Certification:</strong> {title}</p>\n\
+         <p><strong>{kind}:</strong> {title}</p>\n\
          <p><strong>{parts} parts &#183; {modules} modules &#183; {units} units &#183; about {hours:.0} hours</strong></p>\n",
         date = esc(date_stamp),
         title = esc(&book.title),

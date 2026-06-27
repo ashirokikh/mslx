@@ -318,6 +318,12 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     date_stamp: &str,
     progress: &dyn Fn(&str),
 ) -> Result<Vec<u8>, ResolveError> {
+    // A self-contained fixture book that exercises every element type, for checking rendering
+    // across readers. No network needed, so it works in the browser too.
+    if input.trim().eq_ignore_ascii_case("test-mslx-epub") {
+        progress("Building the mslx test book\u{2026}");
+        return build_test_epub(date_stamp);
+    }
     let book = resolve_certification(fetcher, input, locale).await?;
 
     let mut chapters: Vec<Chapter> = Vec::new();
@@ -518,6 +524,240 @@ fn badge_img(icon_url: &Option<String>) -> String {
         _ => String::new(),
     }
 }
+
+/// A self-contained "kitchen sink" EPUB exercising every element mslx emits: a cover badge,
+/// nested TOC, headings, lists, a table, a blockquote, footnote, inline + block code, a
+/// rasterized SVG diagram and figure, and a knowledge-check quiz with an answer key. Built
+/// from the input `test-mslx-epub`; handy for checking rendering across readers. No network.
+pub fn build_test_epub(date_stamp: &str) -> Result<Vec<u8>, ResolveError> {
+    use crate::quiz::{Choice, Question, Quiz};
+
+    let mut chapters: Vec<Chapter> = Vec::new();
+    let mut nav: Vec<NavEntry> = Vec::new();
+    let mut resources: Vec<Resource> = Vec::new();
+
+    let push_png = |resources: &mut Vec<Resource>, name: &str, svg: &str| {
+        if let Some(png) = rasterize_svg(svg) {
+            resources.push(Resource {
+                filename: format!("media/{name}.png"),
+                media_type: "image/png".to_string(),
+                data: png,
+            });
+        }
+    };
+
+    // Cover: badge + description (the title comes from the chapter wrapper).
+    push_png(&mut resources, "badge", TEST_BADGE_SVG);
+    let cover_body = format!(
+        "<div class=\"badge-wrap\"><img class=\"badge\" src=\"media/badge.png\" alt=\"mslx test badge\"/></div>\n\
+         <p class=\"muted\">A fixture that exercises every element mslx emits, so you can see how a \
+         reader renders headings, lists, tables, blockquotes, inline and block code, images, an SVG \
+         diagram, and a knowledge-check quiz. No Microsoft content. Assembled {date}.</p>",
+        date = esc(date_stamp),
+    );
+    chapters.push(Chapter {
+        id: "cover".into(),
+        filename: "cover.xhtml".into(),
+        title: "mslx rendering test book".into(),
+        body: cover_body,
+        module_header: None,
+    });
+    nav.push(NavEntry::leaf("cover.xhtml", "Title page"));
+
+    // Part 1 (nested in the TOC) with one unit per element family.
+    let mut part = NavEntry::leaf("u01.xhtml", "Part 1: Elements");
+
+    chapters.push(Chapter {
+        id: "u01".into(),
+        filename: "u01.xhtml".into(),
+        title: "Text and structure".into(),
+        body: crate::markdown::markdown_to_xhtml(TEST_TEXT_MD, "media"),
+        module_header: Some("Part 1: Elements".into()),
+    });
+    part.children.push(NavEntry::leaf("u01.xhtml", "Text and structure"));
+
+    chapters.push(Chapter {
+        id: "u02".into(),
+        filename: "u02.xhtml".into(),
+        title: "Code blocks".into(),
+        body: crate::markdown::markdown_to_xhtml(TEST_CODE_MD, "media"),
+        module_header: None,
+    });
+    part.children.push(NavEntry::leaf("u02.xhtml", "Code blocks"));
+
+    push_png(&mut resources, "diagram", TEST_DIAGRAM_SVG);
+    push_png(&mut resources, "figure", TEST_FIGURE_SVG);
+    chapters.push(Chapter {
+        id: "u03".into(),
+        filename: "u03.xhtml".into(),
+        title: "Images and diagrams".into(),
+        body: TEST_IMAGE_BODY.to_string(),
+        module_header: None,
+    });
+    part.children.push(NavEntry::leaf("u03.xhtml", "Images and diagrams"));
+
+    let quiz = Quiz {
+        title: String::new(),
+        questions: vec![
+            Question {
+                content: "Which command creates a resource group?".into(),
+                choices: vec![
+                    Choice { content: "az group create".into(), is_correct: true, explanation: "az group create makes a new resource group.".into() },
+                    Choice { content: "az vm create".into(), is_correct: false, explanation: String::new() },
+                    Choice { content: "az storage account create".into(), is_correct: false, explanation: String::new() },
+                ],
+            },
+            Question {
+                content: "Which of these are Azure compute services? (Choose two.)".into(),
+                choices: vec![
+                    Choice { content: "Virtual Machines".into(), is_correct: true, explanation: String::new() },
+                    Choice { content: "Blob Storage".into(), is_correct: false, explanation: String::new() },
+                    Choice { content: "Azure Functions".into(), is_correct: true, explanation: "Virtual Machines and Functions both run your workloads.".into() },
+                ],
+            },
+        ],
+    };
+    chapters.push(Chapter {
+        id: "u04".into(),
+        filename: "u04.xhtml".into(),
+        title: "Knowledge check".into(),
+        body: render_quiz_xhtml(&quiz),
+        module_header: None,
+    });
+    part.children.push(NavEntry::leaf("u04.xhtml", "Knowledge check"));
+
+    nav.push(part);
+
+    // Sources appendix + the standard provenance line.
+    let sources_body = format!(
+        "<p>This is a synthetic test book generated by mslx to check element rendering. It \
+         contains no Microsoft Learn content.</p>\n\
+         <ul>\n<li><a href=\"https://learn.microsoft.com/\">Microsoft Learn</a></li>\n\
+         <li><a href=\"https://{repo}\">mslx on GitHub</a></li>\n</ul>\n\
+         <hr/>\n<p class=\"muted\">Made with mslx. Source and issues at \
+         <a href=\"https://{repo}\">{repo}</a>.</p>\n",
+        repo = MSLX_REPO,
+    );
+    chapters.push(Chapter {
+        id: "sources".into(),
+        filename: "sources.xhtml".into(),
+        title: "Sources and resources".into(),
+        body: sources_body,
+        module_header: None,
+    });
+    nav.push(NavEntry::leaf("sources.xhtml", "Sources and resources"));
+
+    let modified = format!("{date_stamp}T00:00:00Z");
+    build_epub(
+        "mslx rendering test book",
+        "mslx-test-book",
+        &modified,
+        "en",
+        &chapters,
+        &nav,
+        &resources,
+    )
+    .map_err(|e| ResolveError::BadInput(format!("epub packaging failed: {e}")))
+}
+
+const TEST_BADGE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">
+<path d="M110 12 L196 44 L196 120 Q196 184 110 208 Q24 184 24 120 L24 44 Z" fill="#0b3d5c"/>
+<text x="110" y="100" font-family="sans-serif" font-size="30" font-weight="bold" fill="#ffffff" text-anchor="middle">mslx</text>
+<text x="110" y="138" font-family="sans-serif" font-size="18" fill="#bcd6ea" text-anchor="middle">TEST</text>
+</svg>"##;
+
+const TEST_DIAGRAM_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="520" height="180" viewBox="0 0 520 180">
+<rect x="20" y="60" width="150" height="60" rx="8" fill="#e8f0f7" stroke="#0b3d5c" stroke-width="2"/>
+<text x="95" y="96" font-family="sans-serif" font-size="18" fill="#0b3d5c" text-anchor="middle">Client</text>
+<rect x="350" y="60" width="150" height="60" rx="8" fill="#e8f0f7" stroke="#0b3d5c" stroke-width="2"/>
+<text x="425" y="96" font-family="sans-serif" font-size="18" fill="#0b3d5c" text-anchor="middle">Server</text>
+<line x1="170" y1="90" x2="345" y2="90" stroke="#0b3d5c" stroke-width="2"/>
+<polygon points="345,90 333,84 333,96" fill="#0b3d5c"/>
+<text x="258" y="78" font-family="sans-serif" font-size="14" fill="#33526a" text-anchor="middle">HTTPS request</text>
+</svg>"##;
+
+const TEST_FIGURE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="440" height="220" viewBox="0 0 440 220">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cc9"/><stop offset="1" stop-color="#0b3d5c"/></linearGradient></defs>
+<rect width="440" height="220" fill="url(#g)"/>
+<circle cx="130" cy="110" r="56" fill="#ffd24d"/>
+<rect x="220" y="70" width="170" height="80" rx="10" fill="#ffffff" opacity="0.92"/>
+<text x="305" y="118" font-family="sans-serif" font-size="22" fill="#0b3d5c" text-anchor="middle">Sample figure</text>
+</svg>"##;
+
+const TEST_IMAGE_BODY: &str = r##"<p>A rasterized SVG diagram. This tests inline SVG text rendering, which many EPUB readers cannot do natively but mslx bakes in:</p>
+<img class="content-img" src="media/diagram.png" alt="Client to server request diagram"/>
+<p>A figure with a gradient, shapes, and a label:</p>
+<img class="content-img" src="media/figure.png" alt="Sample figure"/>
+"##;
+
+const TEST_TEXT_MD: &str = r##"This unit shows the text and structural elements. This paragraph mixes **bold**, *italic*, ~~strikethrough~~, and `inline code` such as `az group list`, plus a [link to Microsoft Learn](https://learn.microsoft.com/).
+
+### Unordered and nested lists
+
+- First item
+- Second item
+  - Nested item A
+  - Nested item B
+- Third item
+
+### Ordered list
+
+1. Create a resource group.
+2. Deploy the template.
+3. Verify the deployment.
+
+### Table
+
+| Resource | SKU | Region |
+| --- | --- | --- |
+| Storage account | Standard_LRS | westus2 |
+| Virtual machine | Standard_DS1_v2 | eastus |
+| Key vault | Standard | westeurope |
+
+### Blockquote
+
+> **Note** Blockquotes are used for notes, tips, and warnings throughout Microsoft Learn content.
+
+A footnote reference sits here.[^1]
+
+[^1]: This is the footnote text, rendered at the end of the section.
+"##;
+
+const TEST_CODE_MD: &str = r##"This unit shows code rendering. Inline commands like `az login` and parameters like `--resource-group` appear in prose.
+
+### Long single-line command
+
+```bash
+RGROUP=$(az group create --name vmbackups --location westus2 --output tsv --query name)
+```
+
+### Multi-line command
+
+```bash
+az vm create \
+    --resource-group $RGROUP \
+    --name NW-APP01 \
+    --image Win2025Datacenter \
+    --admin-username azureuser \
+    --generate-ssh-keys
+```
+
+### JSON
+
+```json
+{
+  "parameters": {
+    "storageName": { "type": "string", "minLength": 3, "maxLength": 24 }
+  }
+}
+```
+
+### PowerShell
+
+```powershell
+New-AzResourceGroup -Name "vmbackups" -Location "westus2"
+```
+"##;
 
 fn cover_body(book: &Book, date_stamp: &str) -> String {
     badge_img(&book.icon_url)

@@ -55,6 +55,9 @@ code { font-size: 0.9em; background: #eef0f2; color: #1b1f23; padding: 0.1em 0.3
 pre { white-space: pre-wrap; overflow-wrap: break-word; background: #f6f8fa; color: #1b1f23; border: 1px solid #d8dee4; border-radius: 6px; padding: 0.7em 0.9em; font-size: 0.85em; line-height: 1.45; overflow-x: auto; }
 pre code { background: none; color: inherit; padding: 0; border-radius: 0; font-size: inherit; }
 blockquote { border-left: 3px solid #bbb; margin: 1em 0; padding: 0.2em 1em; color: #333; }
+table { border-collapse: collapse; margin: 0.8em 0; font-size: 0.95em; }
+th, td { border: 1px solid #d8dee4; padding: 0.4em 0.7em; text-align: left; }
+th { background: #f0f3f6; color: #1b1f23; }
 img { max-width: 100%; height: auto; }
 img.content-img { display: block; max-width: 100%; height: auto; margin: 0.6em auto; }
 .quiz-q { margin: 1.2em 0; }

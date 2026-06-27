@@ -350,6 +350,9 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     // Business Central, Power Platform live in private repos with no public mirror).
     let mut modules_total = 0usize;
     let mut modules_with_source = 0usize;
+    // Modules whose content is not in the public repo (placeholders in the book), reported at
+    // the end so the page can warn the user and log which parts were unavailable.
+    let mut missing_modules: Vec<String> = Vec::new();
 
     // Pass 1: walk the tree, build the structure + a flat list of fetch tasks (no IO yet).
     for (pi, part) in book.parts.iter().enumerate() {
@@ -371,6 +374,8 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
             modules_total += 1;
             if base.is_some() {
                 modules_with_source += 1;
+            } else {
+                missing_modules.push(module.title.clone());
             }
 
             let mut module_nav = NavEntry::leaf(part_file.clone(), module.title.clone());
@@ -510,7 +515,30 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
         &resources,
     )
     .map_err(|e| ResolveError::BadInput(format!("epub packaging failed: {e}")))?;
+
+    // Report which modules had no public source, marker-prefixed so the page intercepts it
+    // from the progress stream (for a warning + telemetry) rather than displaying it.
+    let missing_json = missing_modules
+        .iter()
+        .map(|m| format!("\"{}\"", json_escape(m)))
+        .collect::<Vec<_>>()
+        .join(",");
+    progress(&format!(
+        "__MSLX_REPORT__{{\"resolved\":\"{}\",\"missing\":[{}]}}",
+        json_escape(&book.title),
+        missing_json
+    ));
+
     Ok(bytes)
+}
+
+/// Minimal JSON string escaping for the progress report payload.
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .replace('\t', " ")
 }
 
 /// A centered badge `<img>` (the SVG url; `embed_images` rasterizes it to PNG so it renders

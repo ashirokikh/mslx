@@ -48,39 +48,26 @@ pub struct Resource {
 const CSS: &str = r#"
 body { font-family: sans-serif; line-height: 1.5; margin: 1em; }
 h1, h2, h3 { font-family: sans-serif; line-height: 1.2; }
-.module-name { border-top: 2px solid #b9c6cf; padding-top: 0.4em; color: #0b3d5c; }
-.module-name + h2 { margin-top: 0.2em; color: #345; font-weight: normal; }
+.module-name { border-top: 2px solid rgba(130, 140, 150, 0.5); padding-top: 0.4em; }
+.module-name + h2 { margin-top: 0.2em; font-weight: normal; }
 code, pre { font-family: monospace; }
-code { background: #eef0f2; padding: 0.1em 0.35em; border-radius: 3px; }
-pre { white-space: pre-wrap; background: #f4f4f4; padding: 0.6em; }
-pre code { background: transparent; padding: 0; border-radius: 0; }
-blockquote { border-left: 3px solid #bbb; margin: 1em 0; padding: 0.2em 1em; color: #333; }
+code.ic { background: rgba(130, 140, 150, 0.2); padding: 0.1em 0.35em; border-radius: 3px; }
+pre { white-space: pre-wrap; background: rgba(130, 140, 150, 0.14); padding: 0.6em; }
+blockquote { border-left: 3px solid #888; margin: 1em 0; padding: 0.2em 1em; }
 table { border-collapse: collapse; margin: 0.8em 0; font-size: 0.95em; }
 th, td { border: 1px solid #d8dee4; padding: 0.4em 0.7em; text-align: left; }
-th { background: #f0f3f6; color: #1b1f23; }
+th { background: rgba(130, 140, 150, 0.18); }
 img { max-width: 100%; height: auto; }
 img.content-img { display: block; max-width: 100%; height: auto; margin: 0.6em auto; }
 .quiz-q { margin: 1.2em 0; }
 .quiz-choices { list-style-type: upper-alpha; margin: 0.3em 0 0.5em 1.4em; }
 .quiz-choices li { margin: 0.2em 0; }
-.answer-key { font-family: sans-serif; color: #0b3d5c; margin-top: 1.2em; }
-.answer { color: #333; font-size: 0.95em; margin: 0.3em 0; }
-.muted { color: #666; font-size: 0.9em; }
+.answer-key { font-family: sans-serif; margin-top: 1.2em; }
+.answer { opacity: 0.9; font-size: 0.95em; margin: 0.3em 0; }
+.muted { opacity: 0.7; font-size: 0.9em; }
 .badge-wrap { text-align: center; margin: 0.5em 0 1em; }
 img.badge { max-width: 150px; height: auto; }
 img.learn-icon { height: 1.1em; width: auto; vertical-align: middle; }
-
-@media (prefers-color-scheme: dark) {
-  code { background: #2d333b; color: #e6e6e6; }
-  pre { background: #1e2228; color: #e6e6e6; }
-  th { background: #2d333b; color: #e6e6e6; }
-  blockquote { color: #c2c2c2; border-left-color: #555; }
-  .answer { color: #c9c9c9; }
-  .muted { color: #9aa0a6; }
-  .module-name { color: #7fb0d4; border-top-color: #3a4a57; }
-  .module-name + h2 { color: #aac4d8; }
-  .answer-key { color: #7fb0d4; }
-}
 "#;
 
 /// Build a complete EPUB from ordered chapters.

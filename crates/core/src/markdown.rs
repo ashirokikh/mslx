@@ -32,7 +32,19 @@ pub fn markdown_to_xhtml_with_unit(md: &str, media_base: &str, unit_url: &str) -
     let parser = Parser::new_ext(&pre, opts);
     let mut html_out = String::new();
     html::push_html(&mut html_out, parser);
-    xhtmlify(&html_out)
+    tag_inline_code(&xhtmlify(&html_out))
+}
+
+/// Give inline `<code>` a class so it can be styled on its own. Block code is always
+/// `<pre><code...>`; inline code is a bare `<code>`. Styling inline via a class (rather than a
+/// broad `code {}` rule undone by `pre code {}`) matters because some EPUB readers (e.g. Moon+)
+/// ignore the descendant-selector override, which would otherwise leak the inline background
+/// into code blocks.
+fn tag_inline_code(html: &str) -> String {
+    const SENTINEL: &str = "\u{0}PRECODE\u{0}";
+    html.replace("<pre><code", SENTINEL)
+        .replace("<code>", "<code class=\"ic\">")
+        .replace(SENTINEL, "<pre><code")
 }
 
 /// Build the markdown for a video reference. Prefer the unit's Learn page (`unit_url`, which

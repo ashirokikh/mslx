@@ -24,8 +24,13 @@ pub fn unit_markdown_to_xhtml(raw_md: &str, unit_url: &str) -> Option<String> {
         return None;
     }
     let abs = absolutize_media(&body, unit_url);
-    let html = markdown_to_xhtml_with_unit(&abs, unit_url, unit_url);
-    Some(promote_standalone_images(&rescue_image_code_blocks(&html, unit_url)))
+    // Learn unit markdown references images module-relative (`media/x.png`, `../media/x.png`),
+    // and those live at the MODULE level, not under the unit - so the media base is the unit URL
+    // minus its last path segment. (The `../../<group>/<module>/media/` form is already made
+    // absolute by absolutize_media, so it's unaffected.)
+    let module_base = unit_url.rsplit_once('/').map(|(m, _)| m).unwrap_or(unit_url);
+    let html = markdown_to_xhtml_with_unit(&abs, module_base, unit_url);
+    Some(promote_standalone_images(&rescue_image_code_blocks(&html, module_base, unit_url)))
 }
 
 /// Rescue images that landed in an indented code block. Learn over-indents list-item continuation
@@ -33,7 +38,7 @@ pub fn unit_markdown_to_xhtml(raw_md: &str, unit_url: &str) -> Option<String> {
 /// CommonMark's indented-code rule, so `![..](..)` renders as literal text. A bare `<pre><code>`
 /// (fenced code carries a `language-*` class, so it's untouched) whose content contains image
 /// syntax is unescaped and re-rendered as real Markdown.
-fn rescue_image_code_blocks(html: &str, unit_url: &str) -> String {
+fn rescue_image_code_blocks(html: &str, media_base: &str, unit_url: &str) -> String {
     const OPEN: &str = "<pre><code>";
     const CLOSE: &str = "</code></pre>";
     let mut out = String::with_capacity(html.len());
@@ -45,7 +50,7 @@ fn rescue_image_code_blocks(html: &str, unit_url: &str) -> String {
             if inner.contains("![") {
                 out.push_str(&rest[..start]);
                 let md = html_unescape(inner);
-                out.push_str(&markdown_to_xhtml_with_unit(&md, unit_url, unit_url));
+                out.push_str(&markdown_to_xhtml_with_unit(&md, media_base, unit_url));
                 rest = &after[end + CLOSE.len()..];
                 continue;
             }

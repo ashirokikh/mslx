@@ -221,6 +221,20 @@ struct UnitTask {
     // ordinal include fallback.
     content_ordinal: usize,
     non_kc_count: usize,
+    // Set when the module isn't in the public GitHub index but has a Learn URL: the page-URL
+    // base to scrape this unit from instead of GitHub markdown.
+    scrape_base: Option<String>,
+}
+
+/// The unit-page base for scraping a module that isn't on GitHub: the module's Learn training
+/// URL, with the catalog tracking query and trailing slash removed. `None` if the module has no
+/// usable training URL (nothing to scrape).
+fn scrapeable_base(module_url: &str) -> Option<String> {
+    if module_url.contains("/training/modules/") {
+        Some(module_url.split('?').next().unwrap_or(module_url).trim_end_matches('/').to_string())
+    } else {
+        None
+    }
 }
 
 /// Build an EPUB (bytes) for a single module identified by its uid.
@@ -344,11 +358,15 @@ pub async fn build_scraped_module_epub<F: Fetcher + Sync>(
         module_header: None,
     });
 
+    progress(&format!(
+        "\"{}\" isn't in the public source; scraping its Microsoft Learn pages instead (slower).",
+        module.title
+    ));
     for (i, unit) in module.units.iter().enumerate() {
         let n = i + 1;
         let slug = unit_slug_from_uid(&unit.uid);
         progress(&format!("[{n}/{}] {} \u{203a} {}", module.units.len(), module.title, unit.title));
-        let (body, learn_url) = scrape_unit_body(fetcher, base, n, slug).await;
+        let (body, learn_url) = scrape_unit_body(fetcher, base, n, slug, unit.is_knowledge_check).await;
         sources.push(SourceRef {
             title: unit.title.clone(),
             learn_url,
@@ -393,24 +411,137 @@ pub async fn build_scraped_module_epub<F: Fetcher + Sync>(
 /// Fetch a unit page and extract its prose as XHTML. Tries the numbered URL (`{n}-{slug}`, the
 /// canonical Learn form) and falls back to the bare slug; on any failure returns a placeholder
 /// body so a single missing unit doesn't sink the whole module. Returns `(body, learn_url)`.
+///
+/// Knowledge-check units render their questions as an interactive widget that lives outside the
+/// scraped content container, so the prose is just the intro. For those we append a link out to
+/// the live page (mirrors the "Watch video on Microsoft Learn" treatment).
 async fn scrape_unit_body<F: Fetcher>(
     fetcher: &F,
     base: &str,
     n: usize,
     slug: &str,
+    is_kc: bool,
 ) -> (String, String) {
     let candidates = [format!("{base}/{n}-{slug}"), format!("{base}/{slug}")];
     for url in &candidates {
-        if let Ok(html) = get_text_retrying(fetcher, url).await {
-            if let Some(xhtml) = crate::scrape::extract_unit_xhtml(&html, url) {
-                return (xhtml, url.clone());
+        // Learn serves each unit's original authored Markdown here, so it runs through the same
+        // markdown_to_xhtml path as GitHub units (identical formatting).
+        let md_url = format!("{url}?accept=text/markdown");
+        if let Ok(md) = get_text_retrying(fetcher, &md_url).await {
+            if let Some(xhtml) = crate::scrape::unit_markdown_to_xhtml(&md, url) {
+                let body = if is_kc { with_kc_link(&xhtml, url) } else { xhtml };
+                return (body, url.clone());
             }
         }
     }
-    (
-        "<p class=\"muted\">This unit's content could not be scraped from Microsoft Learn.</p>".into(),
-        candidates[0].clone(),
+    let url = &candidates[0];
+    let body = if is_kc {
+        with_kc_link("", url)
+    } else {
+        "<p class=\"muted\">This unit's content could not be scraped from Microsoft Learn.</p>".into()
+    };
+    (body, url.clone())
+}
+
+/// Append the "check your knowledge on Microsoft Learn" link to a knowledge-check body, since the
+/// interactive quiz itself can't be scraped.
+fn with_kc_link(intro_xhtml: &str, url: &str) -> String {
+    format!(
+        "{intro}<p><a href=\"{url}\">Check your knowledge on the Microsoft Learn website</a></p>",
+        intro = intro_xhtml,
+        url = esc(url),
     )
+}
+
+/// Whether an app input refers to a single module rather than a cert/exam/path - a
+/// `/training/modules/<slug>` URL. Module *uids* aren't distinguished here (they overlap with
+/// other uid shapes); URL is the reliable, user-facing signal.
+pub fn input_is_module(input: &str) -> bool {
+    input.contains("/training/modules/")
+}
+
+/// Top-level export entry: dispatch on the input. A module URL exports just that module
+/// (GitHub markdown if indexed, else scraped); anything else is a full certification/exam/path.
+pub async fn build_export_epub<F: Fetcher + Sync>(
+    fetcher: &F,
+    index: &ContentIndex,
+    input: &str,
+    locale: &str,
+    date_stamp: &str,
+    progress: &(dyn Fn(&str) + Sync),
+) -> Result<Vec<u8>, ResolveError> {
+    if input_is_module(input) {
+        build_module_epub_auto(fetcher, index, input, locale, date_stamp, progress).await
+    } else {
+        build_certification_epub(fetcher, index, input, locale, date_stamp, progress).await
+    }
+}
+
+/// Build a single-module EPUB, choosing the source automatically: GitHub markdown when the module
+/// is in the public index, otherwise scraping its Learn pages. `input` is a module uid or URL.
+pub async fn build_module_epub_auto<F: Fetcher + Sync>(
+    fetcher: &F,
+    index: &ContentIndex,
+    input: &str,
+    locale: &str,
+    date_stamp: &str,
+    progress: &(dyn Fn(&str) + Sync),
+) -> Result<Vec<u8>, ResolveError> {
+    let uid = resolve_module_uid(fetcher, input, locale).await?;
+    let module = resolve_module(fetcher, &uid, locale).await?;
+    let on_github = module
+        .url
+        .as_deref()
+        .and_then(module_slug_from_url)
+        .map(|s| index.module_raw_base(&s).is_some())
+        .unwrap_or(false);
+    if on_github {
+        build_module_epub(fetcher, index, &module.uid, locale, date_stamp).await
+    } else {
+        build_scraped_module_epub(fetcher, &module.uid, locale, date_stamp, progress).await
+    }
+}
+
+/// Resolve a module uid from a module uid or a `/training/modules/<slug>[/<unit>]` URL. The
+/// catalog keys modules by uid (not slug), and uid != slug in general, so for a URL we read the
+/// page's `<meta name="uid">`. A module landing page carries the module uid directly; a unit page
+/// carries `<module-uid>.<unit-slug>`, so we drop the trailing unit segment in that case.
+async fn resolve_module_uid<F: Fetcher>(
+    fetcher: &F,
+    input: &str,
+    _locale: &str,
+) -> Result<String, ResolveError> {
+    if !input.contains("/training/modules/") {
+        return Ok(input.to_string()); // already a uid
+    }
+    let clean = input.split('?').next().unwrap_or(input).trim_end_matches('/');
+    // Segments after `/training/modules/`: `<module-slug>` alone, or `<module-slug>/<unit-stem>`.
+    let is_unit_page = clean
+        .split("/training/modules/")
+        .nth(1)
+        .map(|tail| tail.contains('/'))
+        .unwrap_or(false);
+    let html = get_text_retrying(fetcher, clean).await?;
+    let uid = extract_meta_uid(&html)
+        .ok_or_else(|| ResolveError::BadInput(format!("could not find a module uid at {input}")))?;
+    Ok(if is_unit_page { drop_last_segment(&uid) } else { uid })
+}
+
+/// Pull `<meta name="uid" content="...">` from a Learn page.
+fn extract_meta_uid(html: &str) -> Option<String> {
+    let i = html.find("name=\"uid\"")?;
+    let seg = &html[i..];
+    let c = seg.find("content=\"")? + "content=\"".len();
+    let end = seg[c..].find('"')?;
+    Some(seg[c..c + end].to_string())
+}
+
+/// Drop the last dotted segment (`a.b.c` -> `a.b`). A unit-page uid is `<module-uid>.<unit-slug>`.
+fn drop_last_segment(uid: &str) -> String {
+    match uid.rfind('.') {
+        Some(i) => uid[..i].to_string(),
+        None => uid.to_string(),
+    }
 }
 
 /// Build a single EPUB for an entire certification: parts -> modules -> units, with a
@@ -456,6 +587,8 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     // Business Central, Power Platform live in private repos with no public mirror).
     let mut modules_total = 0usize;
     let mut modules_with_source = 0usize;
+    // Modules sourced by scraping rendered Learn pages (not on GitHub but reachable on Learn).
+    let mut scraped_modules = 0usize;
     // Modules whose content is not in the public repo (placeholders in the book), reported at
     // the end so the page can warn the user and log which parts were unavailable.
     let mut missing_modules: Vec<String> = Vec::new();
@@ -477,9 +610,14 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
             let module_url = module.url.clone().unwrap_or_default();
             let slug = module_slug_from_url(&module_url);
             let base = slug.as_deref().and_then(|s| index.module_raw_base(s));
+            // Not on GitHub but reachable on Learn -> scrape the rendered pages instead.
+            let scrape_base = if base.is_none() { scrapeable_base(&module_url) } else { None };
             modules_total += 1;
             if base.is_some() {
                 modules_with_source += 1;
+            } else if scrape_base.is_some() {
+                modules_with_source += 1;
+                scraped_modules += 1;
             } else {
                 missing_modules.push(module.title.clone());
             }
@@ -505,6 +643,7 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
                     position: ui + 1,
                     content_ordinal,
                     non_kc_count,
+                    scrape_base: scrape_base.clone(),
                 });
                 source_slots.push((gidx, module.title.clone(), unit.title.clone()));
                 module_nav
@@ -552,9 +691,22 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
         .iter()
         .map(|(g, m, u)| (*g, format!("{m} \u{203a} {u}")))
         .collect();
+    if scraped_modules > 0 {
+        progress(&format!(
+            "{scraped_modules} module(s) aren't in the public source; scraping their Microsoft \
+             Learn pages instead (this is slower)."
+        ));
+    }
     progress(&format!("Fetching {total} units\u{2026}"));
     let fetches = stream::iter(tasks)
         .map(|t| async move {
+            // Scraped module: pull each unit's prose from its rendered Learn page.
+            if let Some(sbase) = t.scrape_base.as_deref() {
+                let uslug = unit_slug_from_uid(&t.unit_uid);
+                let (body, learn) =
+                    scrape_unit_body(fetcher, sbase, t.position, uslug, t.is_kc).await;
+                return (t.gidx, (body, learn, String::new()));
+            }
             let r = match (t.slug.as_deref(), t.base.as_deref()) {
                 (Some(slug), Some(base)) => {
                     let res = if t.is_kc {

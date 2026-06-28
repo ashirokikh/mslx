@@ -128,7 +128,9 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("(indexed {} modules)", index.modules.len());
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         let progress = |msg: &str| eprintln!("  {msg}");
-        let bytes = mslx_core::assemble::build_certification_epub(
+        // Dispatches: a module URL exports just that module (markdown or scraped); cert/exam/path
+        // builds the whole book and scrapes any modules missing from the public source.
+        let bytes = mslx_core::assemble::build_export_epub(
             &fetcher, &index, input, &locale, &date, &progress,
         )
         .await?;

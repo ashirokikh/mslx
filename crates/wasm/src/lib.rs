@@ -7,7 +7,7 @@
 //! unchanged here - we only swap the native reqwest `Fetcher` for one backed by `fetch`.
 
 use mslx_core::{
-    assemble::build_certification_epub, fetch_prebuilt_index, FetchError, Fetcher, ResolveError,
+    assemble::build_export_epub, fetch_prebuilt_index, FetchError, Fetcher, ResolveError,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -127,7 +127,7 @@ pub async fn export_book(
         .await
         .map_err(map_resolve_err)?;
     progress("Resolving the certification\u{2026}");
-    let bytes = build_certification_epub(&fetcher, &index, &input, &locale, &date_stamp, &progress)
+    let bytes = build_export_epub(&fetcher, &index, &input, &locale, &date_stamp, &progress)
         .await
         .map_err(map_resolve_err)?;
     Ok(js_sys::Uint8Array::from(bytes.as_slice()))

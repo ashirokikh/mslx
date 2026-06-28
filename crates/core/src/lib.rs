@@ -74,6 +74,9 @@ pub trait Fetcher {
 pub struct FetchError {
     pub url: String,
     pub message: String,
+    /// HTTP status, when the failure was a response (not a network error). Lets the retry layer
+    /// skip a permanent client error (a 404 never becomes a 200) instead of backing off 6 times.
+    pub status: Option<u16>,
 }
 
 // ---------------------------------------------------------------------------
@@ -611,19 +614,28 @@ async fn resolve_study_guide<F: Fetcher>(
         LearnInput::Course(code) => {
             // The course (`course.<code>t00`) carries the authoritative study guide - the right
             // entry point for certs/exams whose own catalog study guide is empty (Business
-            // Central, retired exams, ...).
-            let (paths, title, icon) = course_study_guide(fetcher, &code, locale).await;
-            if paths.is_empty() {
-                return Err(ResolveError::NoPaths(format!(
-                    "course {code} (no learning paths in its study guide)"
-                )));
+            // Central, retired exams, ...). Use the course's OWN icon for the cover, not a badge
+            // derived from its difficulty level: a course's "advanced" rating is content
+            // difficulty, not the credential level (mb-820 is an advanced course leading to an
+            // associate cert), so the level badge would be wrong.
+            for suffix in ["t00", "t01"] {
+                let uid = format!("course.{code}{suffix}");
+                let resp = fetch_chunk(fetcher, "courses", &[uid.clone()], locale).await?;
+                if let Some(course) = resp.courses.into_iter().find(|c| c.uid == uid) {
+                    let paths = study_guide_paths(&course.study_guide);
+                    if !paths.is_empty() {
+                        return Ok(StudyGuide {
+                            title: course.title.unwrap_or_else(|| format!("Course {code}")),
+                            identifier: uid,
+                            icon_url: course.icon_url,
+                            path_uids: paths,
+                        });
+                    }
+                }
             }
-            Ok(StudyGuide {
-                title: title.unwrap_or_else(|| format!("Course {code}")),
-                identifier: format!("course.{code}"),
-                icon_url: icon,
-                path_uids: paths,
-            })
+            Err(ResolveError::NoPaths(format!(
+                "course {code} (no learning paths in its study guide)"
+            )))
         }
     }
 }

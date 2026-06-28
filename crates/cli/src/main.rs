@@ -21,36 +21,25 @@ struct ReqwestFetcher {
 #[async_trait]
 impl Fetcher for ReqwestFetcher {
     async fn get_json(&self, url: &str) -> Result<String, FetchError> {
-        let mkerr = |m: String| FetchError {
+        let mkerr = |e: reqwest::Error| FetchError {
             url: url.to_string(),
-            message: m,
+            message: e.to_string(),
+            status: e.status().map(|s| s.as_u16()),
         };
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| mkerr(e.to_string()))?;
-        let resp = resp.error_for_status().map_err(|e| mkerr(e.to_string()))?;
-        resp.text().await.map_err(|e| mkerr(e.to_string()))
+        let resp = self.client.get(url).send().await.map_err(mkerr)?;
+        let resp = resp.error_for_status().map_err(mkerr)?;
+        resp.text().await.map_err(mkerr)
     }
 
     async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        let mkerr = |m: String| FetchError {
+        let mkerr = |e: reqwest::Error| FetchError {
             url: url.to_string(),
-            message: m,
+            message: e.to_string(),
+            status: e.status().map(|s| s.as_u16()),
         };
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| mkerr(e.to_string()))?;
-        let resp = resp.error_for_status().map_err(|e| mkerr(e.to_string()))?;
-        resp.bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| mkerr(e.to_string()))
+        let resp = self.client.get(url).send().await.map_err(mkerr)?;
+        let resp = resp.error_for_status().map_err(mkerr)?;
+        resp.bytes().await.map(|b| b.to_vec()).map_err(mkerr)
     }
 
     async fn sleep_ms(&self, ms: u64) {

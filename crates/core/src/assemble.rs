@@ -1296,10 +1296,20 @@ async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String,
         }
         match fetcher.get_json(url).await {
             Ok(s) => return Ok(s),
+            // A permanent client error (404 probing a wrong unit URL, etc.) won't change on
+            // retry - return immediately so the caller falls through, instead of backing off
+            // ~6s and hammering the source with the same dead request.
+            Err(e) if is_permanent(e.status) => return Err(e),
             Err(e) => last = Some(e),
         }
     }
     Err(last.expect("loop runs at least once"))
+}
+
+/// A non-retryable HTTP failure: a 4xx that isn't 429 (rate limit). 429 and 5xx and network drops
+/// are transient and worth a backoff retry.
+fn is_permanent(status: Option<u16>) -> bool {
+    matches!(status, Some(s) if (400..500).contains(&s) && s != 429)
 }
 
 /// Same as [`get_text_retrying`] for binary assets. A dropped image fetch otherwise leaves the
@@ -1312,6 +1322,7 @@ async fn get_bytes_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<Vec<u8
         }
         match fetcher.get_bytes(url).await {
             Ok(b) => return Ok(b),
+            Err(e) if is_permanent(e.status) => return Err(e),
             Err(e) => last = Some(e),
         }
     }
@@ -1533,7 +1544,11 @@ mod tests {
             use std::sync::atomic::Ordering;
             if self.remaining_failures.load(Ordering::SeqCst) > 0 {
                 self.remaining_failures.fetch_sub(1, Ordering::SeqCst);
-                return Err(crate::FetchError { url: url.into(), message: "flaky".into() });
+                return Err(crate::FetchError {
+                    url: url.into(),
+                    message: "flaky".into(),
+                    status: Some(503),
+                });
             }
             Ok("body".into())
         }
@@ -1543,6 +1558,38 @@ mod tests {
         async fn sleep_ms(&self, ms: u64) {
             self.sleeps.lock().unwrap().push(ms);
         }
+    }
+
+    // Always returns a 404, recording any sleeps - to prove a permanent error isn't retried.
+    struct NotFoundFetcher {
+        sleeps: std::sync::Mutex<Vec<u64>>,
+    }
+    #[async_trait::async_trait]
+    impl Fetcher for NotFoundFetcher {
+        async fn get_json(&self, url: &str) -> Result<String, crate::FetchError> {
+            Err(crate::FetchError { url: url.into(), message: "HTTP 404".into(), status: Some(404) })
+        }
+        async fn get_bytes(&self, _url: &str) -> Result<Vec<u8>, crate::FetchError> {
+            Ok(vec![])
+        }
+        async fn sleep_ms(&self, ms: u64) {
+            self.sleeps.lock().unwrap().push(ms);
+        }
+    }
+
+    #[test]
+    fn is_permanent_classifies_statuses() {
+        assert!(is_permanent(Some(404)) && is_permanent(Some(403)));
+        assert!(!is_permanent(Some(429)) && !is_permanent(Some(503)) && !is_permanent(None));
+    }
+
+    #[test]
+    fn retry_does_not_retry_a_404() {
+        let f = NotFoundFetcher { sleeps: std::sync::Mutex::new(vec![]) };
+        let r = futures::executor::block_on(get_text_retrying(&f, "https://x/missing"));
+        assert!(r.is_err());
+        // Returned on the first attempt - no backoff sleeps at all (was 6 attempts / ~6s before).
+        assert!(f.sleeps.lock().unwrap().is_empty());
     }
 
     #[test]

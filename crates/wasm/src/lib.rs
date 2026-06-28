@@ -21,20 +21,25 @@ struct BrowserFetcher;
 #[async_trait::async_trait(?Send)]
 impl Fetcher for BrowserFetcher {
     async fn get_json(&self, url: &str) -> Result<String, FetchError> {
-        fetch_text(url)
-            .await
-            .map_err(|message| FetchError { url: url.to_string(), message })
+        fetch_text(url).await.map_err(|message| mk_fetch_err(url, message))
     }
 
     async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        fetch_bytes(url)
-            .await
-            .map_err(|message| FetchError { url: url.to_string(), message })
+        fetch_bytes(url).await.map_err(|message| mk_fetch_err(url, message))
     }
 
     async fn sleep_ms(&self, ms: u64) {
         sleep(ms).await;
     }
+}
+
+/// Build a `FetchError`, recovering the HTTP status from `do_fetch`'s `HTTP <n>` message (network
+/// rejections have no status). Lets the retry layer skip permanent 404s.
+fn mk_fetch_err(url: &str, message: String) -> FetchError {
+    let status = message
+        .strip_prefix("HTTP ")
+        .and_then(|s| s.trim().parse::<u16>().ok());
+    FetchError { url: url.to_string(), message, status }
 }
 
 /// Resolve after `ms` milliseconds via the browser's `setTimeout`, awaited as a future. Used

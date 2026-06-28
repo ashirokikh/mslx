@@ -38,7 +38,11 @@ const MSLX_REPO: &str = "github.com/ashirokikh/mslx";
 /// Download every `<img>` the chapters reference and embed each as a raster file, rewriting
 /// `src` to the local path. SVGs are rasterized to PNG (resvg) so they render in every EPUB
 /// reader - inline/`<img>` SVG is unreliable across readers. Failed fetches keep their URL.
-async fn embed_images<F: Fetcher + Sync>(fetcher: &F, chapters: &mut [Chapter]) -> Vec<Resource> {
+async fn embed_images<F: Fetcher + Sync>(
+    fetcher: &F,
+    chapters: &mut [Chapter],
+    progress: &dyn Fn(&str),
+) -> Vec<Resource> {
     // Collect unique remote image URLs in first-seen order.
     let mut seen = std::collections::HashSet::new();
     let mut order: Vec<String> = Vec::new();
@@ -50,26 +54,36 @@ async fn embed_images<F: Fetcher + Sync>(fetcher: &F, chapters: &mut [Chapter]) 
         }
     }
 
-    // Fetch concurrently: SVG -> fetch text + rasterize to PNG; raster -> fetch bytes.
-    let mut fetched: Vec<(usize, String, Option<(String, Vec<u8>)>)> =
-        stream::iter(order.into_iter().enumerate())
-            .map(|(i, url)| async move {
-                let asset = if is_svg_url(&url) {
-                    match get_text_retrying(fetcher, &url).await {
-                        Ok(svg) => rasterize_svg(&svg).map(|png| ("png".to_string(), png)),
-                        Err(_) => None,
-                    }
-                } else {
-                    get_bytes_retrying(fetcher, &url)
-                        .await
-                        .ok()
-                        .map(|b| (ext_from_url(&url), b))
-                };
-                (i, url, asset)
-            })
-            .buffer_unordered(IMAGE_CONCURRENCY)
-            .collect()
-            .await;
+    // Fetch concurrently: SVG -> fetch text + rasterize to PNG; raster -> fetch bytes. Drive the
+    // stream manually (rather than .collect) so we can report a live "[done/total]" count - the
+    // image phase is the long, otherwise-silent part of a big book.
+    let total = order.len();
+    let stream = stream::iter(order.into_iter().enumerate())
+        .map(|(i, url)| async move {
+            let asset = if is_svg_url(&url) {
+                match get_text_retrying(fetcher, &url).await {
+                    Ok(svg) => rasterize_svg(&svg).map(|png| ("png".to_string(), png)),
+                    Err(_) => None,
+                }
+            } else {
+                get_bytes_retrying(fetcher, &url)
+                    .await
+                    .ok()
+                    .map(|b| (ext_from_url(&url), b))
+            };
+            (i, url, asset)
+        })
+        .buffer_unordered(IMAGE_CONCURRENCY);
+    futures::pin_mut!(stream);
+    let mut fetched: Vec<(usize, String, Option<(String, Vec<u8>)>)> = Vec::with_capacity(total);
+    let mut done = 0usize;
+    while let Some(item) = stream.next().await {
+        done += 1;
+        if total > 0 {
+            progress(&format!("Embedding images [{done}/{total}]\u{2026}"));
+        }
+        fetched.push(item);
+    }
     fetched.sort_by_key(|(i, _, _)| *i);
 
     let mut resources = Vec::new();
@@ -366,7 +380,7 @@ pub async fn build_module_epub<F: Fetcher + Sync>(
         module_header: None,
     });
 
-    let resources = embed_images(fetcher, &mut chapters).await;
+    let resources = embed_images(fetcher, &mut chapters, &|_: &str| {}).await;
     let nav: Vec<NavEntry> = chapters
         .iter()
         .map(|c| NavEntry::leaf(c.filename.clone(), c.title.clone()))
@@ -445,7 +459,7 @@ pub async fn build_scraped_module_epub<F: Fetcher + Sync>(
         module_header: None,
     });
 
-    let resources = embed_images(fetcher, &mut chapters).await;
+    let resources = embed_images(fetcher, &mut chapters, progress).await;
     let nav: Vec<NavEntry> = chapters
         .iter()
         .map(|c| NavEntry::leaf(c.filename.clone(), c.title.clone()))
@@ -865,7 +879,7 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     nav.push(NavEntry::leaf("sources.xhtml", "Sources and resources"));
 
     progress("Downloading and embedding images\u{2026}");
-    let resources = embed_images(fetcher, &mut chapters).await;
+    let resources = embed_images(fetcher, &mut chapters, progress).await;
 
     let identifier = format!("urn:mslx:{}:{}", book.cert_uid, date_stamp);
     let modified = format!("{date_stamp}T00:00:00Z");

@@ -16,6 +16,8 @@ thiserror = "2"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 resvg = "0.44"
+scraper = "0.27"
+ego-tree = "0.11"
 
 [dev-dependencies]
 futures = { version = "0.3", features = ["executor"] }

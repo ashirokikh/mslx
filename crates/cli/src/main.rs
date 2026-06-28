@@ -137,6 +137,24 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Subcommand: `scrape <module-uid-or-url> [out.epub]` - POC: build a module EPUB by scraping
+    // the rendered Learn unit pages (for modules whose Markdown is not on GitHub). No index needed.
+    if pos.first().map(String::as_str) == Some("scrape") {
+        let module = pos
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("scrape: missing <module-uid-or-url>"))?;
+        let out = pos.get(2).cloned().unwrap_or_else(|| "scraped-module.epub".to_string());
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let progress = |msg: &str| eprintln!("  {msg}");
+        let bytes = mslx_core::assemble::build_scraped_module_epub(
+            &fetcher, module, &locale, &date, &progress,
+        )
+        .await?;
+        std::fs::write(&out, &bytes)?;
+        eprintln!("wrote {out} ({} bytes)", bytes.len());
+        return Ok(());
+    }
+
     // Subcommand: `epub <module-uid> [out.epub]`
     if pos.first().map(String::as_str) == Some("epub") {
         let module_uid = pos

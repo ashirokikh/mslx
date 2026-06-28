@@ -19,6 +19,7 @@ pub mod export;
 pub mod markdown;
 pub mod quiz;
 pub mod resolve;
+pub mod scrape;
 
 /// Catalog API base. The Catalog API sends `access-control-allow-origin: *`, so this
 /// same URL is reachable from the browser too.

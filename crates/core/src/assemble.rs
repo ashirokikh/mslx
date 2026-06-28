@@ -316,6 +316,103 @@ pub async fn build_module_epub<F: Fetcher + Sync>(
     Ok(bytes)
 }
 
+/// POC: build a module EPUB by **scraping** the rendered Learn unit pages instead of reading
+/// GitHub Markdown. For modules whose source isn't in the public repo (the Microsoft 365 admin
+/// track, etc.). Reuses the same Chapter / EPUB structure as [`build_module_epub`] so scraped
+/// content lays onto the existing layout; only the per-unit body source differs. `progress` is
+/// called per unit.
+pub async fn build_scraped_module_epub<F: Fetcher + Sync>(
+    fetcher: &F,
+    module_uid: &str,
+    locale: &str,
+    date_stamp: &str,
+    progress: &(dyn Fn(&str) + Sync),
+) -> Result<Vec<u8>, ResolveError> {
+    let module = resolve_module(fetcher, module_uid, locale).await?;
+    let module_url = module.url.clone().unwrap_or_default();
+    // The page-URL base: strip the catalog tracking query and any trailing slash.
+    let base = module_url.split('?').next().unwrap_or(&module_url).trim_end_matches('/');
+
+    let mut chapters: Vec<Chapter> = Vec::new();
+    let mut sources: Vec<SourceRef> = Vec::new();
+
+    chapters.push(Chapter {
+        id: "ch000".into(),
+        filename: "ch000.xhtml".into(),
+        title: module.title.clone(),
+        body: title_page_body(&module.title, base, &module, date_stamp),
+        module_header: None,
+    });
+
+    for (i, unit) in module.units.iter().enumerate() {
+        let n = i + 1;
+        let slug = unit_slug_from_uid(&unit.uid);
+        progress(&format!("[{n}/{}] {} \u{203a} {}", module.units.len(), module.title, unit.title));
+        let (body, learn_url) = scrape_unit_body(fetcher, base, n, slug).await;
+        sources.push(SourceRef {
+            title: unit.title.clone(),
+            learn_url,
+            raw_url: String::new(),
+        });
+        chapters.push(Chapter {
+            id: format!("ch{n:03}"),
+            filename: format!("ch{n:03}.xhtml"),
+            title: unit.title.clone(),
+            body,
+            module_header: None,
+        });
+    }
+
+    chapters.push(Chapter {
+        id: "ch999".into(),
+        filename: "ch999.xhtml".into(),
+        title: "Sources and resources".into(),
+        body: sources_body(&module.title, base, &sources, date_stamp),
+        module_header: None,
+    });
+
+    let resources = embed_images(fetcher, &mut chapters).await;
+    let nav: Vec<NavEntry> = chapters
+        .iter()
+        .map(|c| NavEntry::leaf(c.filename.clone(), c.title.clone()))
+        .collect();
+    let identifier = format!("urn:mslx:{}:{}", module.uid, date_stamp);
+    let modified = format!("{date_stamp}T00:00:00Z");
+    build_epub(
+        &module.title,
+        &identifier,
+        &modified,
+        "en",
+        &chapters,
+        &nav,
+        &resources,
+    )
+    .map_err(|e| ResolveError::BadInput(format!("epub packaging failed: {e}")))
+}
+
+/// Fetch a unit page and extract its prose as XHTML. Tries the numbered URL (`{n}-{slug}`, the
+/// canonical Learn form) and falls back to the bare slug; on any failure returns a placeholder
+/// body so a single missing unit doesn't sink the whole module. Returns `(body, learn_url)`.
+async fn scrape_unit_body<F: Fetcher>(
+    fetcher: &F,
+    base: &str,
+    n: usize,
+    slug: &str,
+) -> (String, String) {
+    let candidates = [format!("{base}/{n}-{slug}"), format!("{base}/{slug}")];
+    for url in &candidates {
+        if let Ok(html) = get_text_retrying(fetcher, url).await {
+            if let Some(xhtml) = crate::scrape::extract_unit_xhtml(&html, url) {
+                return (xhtml, url.clone());
+            }
+        }
+    }
+    (
+        "<p class=\"muted\">This unit's content could not be scraped from Microsoft Learn.</p>".into(),
+        candidates[0].clone(),
+    )
+}
+
 /// Build a single EPUB for an entire certification: parts -> modules -> units, with a
 /// nested table of contents and a sources appendix. `progress` is called per module so a
 /// CLI/UI can show movement during the ~200 content fetches.

@@ -596,6 +596,9 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     let mut modules_with_source = 0usize;
     // Modules sourced by scraping rendered Learn pages (not on GitHub but reachable on Learn).
     let mut scraped_modules = 0usize;
+    // gidx of each module's first unit -> that module's achievement-badge URL, shown with the
+    // module header.
+    let mut module_icons: HashMap<usize, String> = HashMap::new();
     // Modules whose content is not in the public repo (placeholders in the book), reported at
     // the end so the page can warn the user and log which parts were unavailable.
     let mut missing_modules: Vec<String> = Vec::new();
@@ -659,6 +662,11 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
                     scrape_base: scrape_base.clone(),
                 });
                 source_slots.push((gidx, module.title.clone(), unit.title.clone()));
+                if ui == 0 {
+                    if let Some(icon) = &module.icon_url {
+                        module_icons.insert(gidx, icon.clone());
+                    }
+                }
                 module_nav
                     .children
                     .push(NavEntry::leaf(file.clone(), unit.title.clone()));
@@ -764,7 +772,9 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
 
     for (g, slot) in chapter_of_gidx.iter().enumerate().skip(1) {
         if let Some((body, _, _)) = results.get(&g) {
-            chapters[*slot].body = body.clone();
+            // Prefix a module's first unit with the module achievement badge, below its header.
+            let icon = module_icons.get(&g).map(|u| badge_img(&Some(u.clone()))).unwrap_or_default();
+            chapters[*slot].body = format!("{icon}{body}");
         }
     }
 
@@ -1355,7 +1365,8 @@ fn title_page_body(
     date_stamp: &str,
 ) -> String {
     let dur = module.duration_in_minutes.unwrap_or(0);
-    format!(
+    badge_img(&module.icon_url)
+        + &format!(
         "<p class=\"muted\">Microsoft Learn study export, assembled {date} for personal study. \
          Content is Microsoft's; original sources are listed at the end.</p>\n\
          <p><strong>Module:</strong> {title}</p>\n\

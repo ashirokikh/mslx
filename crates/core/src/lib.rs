@@ -177,6 +177,8 @@ struct RawModule {
     url: Option<String>,
     duration_in_minutes: Option<u32>,
     #[serde(default)]
+    icon_url: Option<String>,
+    #[serde(default)]
     units: Vec<String>,
 }
 
@@ -217,6 +219,8 @@ pub struct ModuleNode {
     pub title: String,
     pub url: Option<String>,
     pub duration_in_minutes: Option<u32>,
+    /// Module achievement-badge image URL (from the catalog), if any.
+    pub icon_url: Option<String>,
     pub units: Vec<UnitNode>,
 }
 
@@ -431,6 +435,7 @@ pub async fn resolve_certification<F: Fetcher>(
                 title: m.title.clone(),
                 url: clean_url(m.url.clone()),
                 duration_in_minutes: m.duration_in_minutes,
+                icon_url: m.icon_url.clone(),
                 units,
             });
         }
@@ -820,6 +825,7 @@ pub async fn resolve_module<F: Fetcher>(
         title: m.title,
         url: clean_url(m.url),
         duration_in_minutes: m.duration_in_minutes,
+        icon_url: m.icon_url,
         units,
     })
 }

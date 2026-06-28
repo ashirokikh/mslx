@@ -73,6 +73,10 @@ fn preprocess(md: &str, media_base: &str, unit_url: &str) -> String {
     let mut out = String::with_capacity(md.len());
     for line in md.lines() {
         let trimmed = line.trim_start();
+        // Leading whitespace of the line. Directive rewrites below preserve it so an alert/video
+        // nested inside a list item stays in the item rather than de-indenting to column 0 (which
+        // would close the list and turn following indented content into a code block).
+        let indent = &line[..line.len() - trimmed.len()];
 
         // Drop remaining triple-colon zone markers (`:::row:::`, `:::zone ...`, bare `:::`,
         // `:::image-end:::`) so they do not render as literal text; inner content still flows.
@@ -103,7 +107,7 @@ fn preprocess(md: &str, media_base: &str, unit_url: &str) -> String {
                 let directive = kind.split_whitespace().next().unwrap_or("").to_lowercase();
                 const ALERTS: &[&str] = &["note", "tip", "important", "warning", "caution"];
                 if ALERTS.contains(&directive.as_str()) {
-                    out.push_str(&format!("> **{}**", title_case(kind)));
+                    out.push_str(&format!("{indent}> **{}**", title_case(kind)));
                     if !after.is_empty() {
                         out.push_str(&format!(" {after}"));
                     }
@@ -111,7 +115,7 @@ fn preprocess(md: &str, media_base: &str, unit_url: &str) -> String {
                 } else if !after.is_empty() {
                     // Layout directive (e.g. `[!div class="mx-imgborder"]`): drop the wrapper,
                     // keep any inline content. The wrapped image/text renders on its own.
-                    out.push_str(&format!("> {after}\n"));
+                    out.push_str(&format!("{indent}> {after}\n"));
                 }
                 continue;
             }

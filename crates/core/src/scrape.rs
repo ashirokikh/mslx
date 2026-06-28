@@ -24,7 +24,71 @@ pub fn unit_markdown_to_xhtml(raw_md: &str, unit_url: &str) -> Option<String> {
         return None;
     }
     let abs = absolutize_media(&body, unit_url);
-    Some(markdown_to_xhtml_with_unit(&abs, unit_url, unit_url))
+    let html = markdown_to_xhtml_with_unit(&abs, unit_url, unit_url);
+    Some(promote_standalone_images(&rescue_image_code_blocks(&html, unit_url)))
+}
+
+/// Rescue images that landed in an indented code block. Learn over-indents list-item continuation
+/// (a fixed 4 spaces regardless of marker width); combined with a preceding callout this trips
+/// CommonMark's indented-code rule, so `![..](..)` renders as literal text. A bare `<pre><code>`
+/// (fenced code carries a `language-*` class, so it's untouched) whose content contains image
+/// syntax is unescaped and re-rendered as real Markdown.
+fn rescue_image_code_blocks(html: &str, unit_url: &str) -> String {
+    const OPEN: &str = "<pre><code>";
+    const CLOSE: &str = "</code></pre>";
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        if let Some(end) = after.find(CLOSE) {
+            let inner = &after[..end];
+            if inner.contains("![") {
+                out.push_str(&rest[..start]);
+                let md = html_unescape(inner);
+                out.push_str(&markdown_to_xhtml_with_unit(&md, unit_url, unit_url));
+                rest = &after[end + CLOSE.len()..];
+                continue;
+            }
+        }
+        // Real code block: emit through the opening tag and keep scanning past it.
+        out.push_str(&rest[..start + OPEN.len()]);
+        rest = &rest[start + OPEN.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn html_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Align a scraped standalone image with the GitHub path's `:::image` rendering: a lone
+/// `<p><img .../></p>` (what pulldown emits for `![..](..)`) becomes `<img class="content-img"
+/// .../>`, so it picks up the same centring/border styling a public module's image gets.
+fn promote_standalone_images(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(pos) = rest.find("<p><img ") {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + "<p>".len()..]; // starts at "<img ..."
+        if let Some(end) = after.find("/>") {
+            let close = end + "/>".len();
+            if after[close..].starts_with("</p>") && !after[..close].contains("class=") {
+                out.push_str(&after[..close].replacen("<img ", "<img class=\"content-img\" ", 1));
+                rest = &after[close + "</p>".len()..];
+                continue;
+            }
+        }
+        // Not a clean standalone image - leave the `<p>` as-is and move on.
+        out.push_str("<p>");
+        rest = &rest[pos + "<p>".len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Learn's Markdown export flattens `> [!IMPORTANT]` alerts to a bare keyword line followed by the
@@ -205,7 +269,7 @@ mod tests {
         // Both list items survive, the image renders as an image (not a code block), the note is
         // a callout, and no raw markdown leaks.
         assert_eq!(x.matches("<li>").count(), 2, "both list items kept: {x}");
-        assert!(x.contains("<img src=\"http://x/y.png\""), "image rendered: {x}");
+        assert!(x.contains("src=\"http://x/y.png\""), "image rendered: {x}");
         assert!(!x.contains("<pre>"), "no code block: {x}");
         assert!(!x.contains("![alt]"), "no raw markdown: {x}");
         assert!(x.contains("<blockquote>") && x.contains("<strong>Note</strong>"));
@@ -216,4 +280,5 @@ mod tests {
         assert!(unit_markdown_to_xhtml("---\nuid: x\n---\n", "https://learn.microsoft.com/training/modules/m/1-x").is_none());
     }
 }
+
 

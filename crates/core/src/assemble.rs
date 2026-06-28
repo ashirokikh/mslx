@@ -19,6 +19,10 @@ use std::collections::HashMap;
 /// GitHub. Works the same on the native runtime and the single-threaded wasm one.
 const FETCH_CONCURRENCY: usize = 12;
 
+/// Gentler concurrency used whenever a build scrapes Learn pages. learn.microsoft.com rate-limits
+/// a heavy burst (unlike GitHub-raw), so we trade some speed to keep scraped units from failing.
+const SCRAPE_CONCURRENCY: usize = 4;
+
 /// The mslx project repo, linked from each book's provenance line.
 const MSLX_REPO: &str = "github.com/ashirokikh/mslx";
 
@@ -695,6 +699,9 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     // Pass 2: fetch all unit content concurrently (bounded), filling chapter bodies as each
     // arrives so the caller's `progress` can stream "[n/total] <module> > <unit>" live.
     let total = tasks.len();
+    // Throttle when scraping: learn.microsoft.com rate-limits a heavy burst (GitHub-raw doesn't),
+    // so drop to a gentler concurrency whenever any module is sourced from the scrape path.
+    let concurrency = if scraped_modules > 0 { SCRAPE_CONCURRENCY } else { FETCH_CONCURRENCY };
     // gidx -> "<module> > <unit>" for the per-item progress line.
     let unit_label: HashMap<usize, String> = source_slots
         .iter()
@@ -743,7 +750,7 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
             };
             (t.gidx, r)
         })
-        .buffer_unordered(FETCH_CONCURRENCY);
+        .buffer_unordered(concurrency);
     futures::pin_mut!(fetches);
     let mut results: HashMap<usize, (String, String, String)> = HashMap::new();
     let mut done = 0usize;

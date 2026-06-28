@@ -437,9 +437,13 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
         nav.push(part_nav);
     }
 
-    // If the whole certification has no publicly-sourced content, don't fetch hundreds of
-    // empty units or hand back a hollow book - tell the caller plainly.
-    if modules_total > 0 && modules_with_source == 0 {
+    // If the certification has little or no publicly-sourced content, don't fetch hundreds of
+    // empty units or hand back a hollow book - tell the caller plainly. This covers fully
+    // private tracks (Dynamics / Power Platform) and ones where only a minority of modules are
+    // public, e.g. the Microsoft 365 admin track (MS-900 retired, MS-102 active): their
+    // security modules resolve from the shared public groups, but the admin/fundamentals
+    // modules are not in the public mirror, so the book would be mostly empty.
+    if is_bulk_unavailable(modules_with_source, modules_total) {
         return Err(ResolveError::ContentUnavailable(book.title.clone()));
     }
 
@@ -907,6 +911,15 @@ fn cert_sources_body_flat(
     s
 }
 
+/// Whether a book whose modules are `with_source`-of-`total` publicly sourced should be reported
+/// as content-unavailable instead of built. Blocks when content is absent or a minority (fewer
+/// than half the modules), so a normal certification missing one or two modules still builds, but
+/// a mostly-private track (MS-900 / MS-102 admin content, Dynamics, Power Platform) gives the
+/// caller a clear "not publicly available" signal rather than a hollow EPUB.
+fn is_bulk_unavailable(with_source: usize, total: usize) -> bool {
+    total > 0 && with_source * 2 < total
+}
+
 /// Fetch text with a couple of immediate retries. The unit loop runs many concurrent fetches;
 /// raw.githubusercontent.com occasionally drops one under load, and a silent retry avoids a
 /// whole unit rendering as "Content could not be fetched" for a transient blip.
@@ -1166,6 +1179,23 @@ mod tests {
         async fn sleep_ms(&self, ms: u64) {
             self.sleeps.lock().unwrap().push(ms);
         }
+    }
+
+    #[test]
+    fn bulk_unavailable_blocks_mostly_private_certs_only() {
+        // Fully private or empty -> block.
+        assert!(is_bulk_unavailable(0, 10));
+        assert!(is_bulk_unavailable(0, 1));
+        // MS-900-style: only the shared security modules resolve (3 of 10) -> block.
+        assert!(is_bulk_unavailable(3, 10));
+        // Minority content (4 of 10) -> block.
+        assert!(is_bulk_unavailable(4, 10));
+        // Exactly half or a healthy majority -> build (a normal cert missing a module or two).
+        assert!(!is_bulk_unavailable(5, 10));
+        assert!(!is_bulk_unavailable(28, 30));
+        assert!(!is_bulk_unavailable(1, 1));
+        // No modules at all (nothing resolved) is handled elsewhere, not flagged here.
+        assert!(!is_bulk_unavailable(0, 0));
     }
 
     #[test]

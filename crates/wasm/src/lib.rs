@@ -126,7 +126,7 @@ pub async fn export_book(
     let index = fetch_prebuilt_index(&fetcher, "/api/content-index")
         .await
         .map_err(map_resolve_err)?;
-    progress("Resolving the certification\u{2026}");
+    progress("Resolving the resource\u{2026}");
     let bytes = build_export_epub(&fetcher, &index, &input, &locale, &date_stamp, &progress)
         .await
         .map_err(map_resolve_err)?;

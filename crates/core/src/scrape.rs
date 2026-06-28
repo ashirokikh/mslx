@@ -38,28 +38,41 @@ fn rewrap_alerts(md: &str) -> String {
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     let mut i = 0;
     while i < lines.len() {
-        let kw = lines[i].trim();
+        let line = lines[i];
+        // Preserve the keyword's leading indentation: Learn nests alerts inside list items at a
+        // fixed indent, and emitting the blockquote at column 0 would close the list and turn the
+        // following indented content (images, paragraphs) into a code block.
+        let indent = &line[..line.len() - line.trim_start().len()];
+        let kw = line.trim();
         let standalone = KW.contains(&kw)
             && (i == 0 || lines[i - 1].trim().is_empty())
             && lines.get(i + 1).map(|l| l.trim().is_empty()).unwrap_or(false);
         if standalone {
-            // The alert body is the paragraph after the blank, up to the next blank line.
+            // The alert body is the paragraph after the blank. Stop at a blank line, a dedent, or
+            // a new list marker - Learn often follows the body directly with the next list item
+            // (no blank line), and swallowing it would collapse the list and break later content.
             let mut j = i + 2;
             let mut body: Vec<&str> = Vec::new();
-            while j < lines.len() && !lines[j].trim().is_empty() {
-                body.push(lines[j]);
+            while j < lines.len() {
+                let lj = lines[j];
+                let tj = lj.trim();
+                let lj_indent = lj.len() - lj.trim_start().len();
+                if tj.is_empty() || lj_indent < indent.len() || starts_list_item(tj) {
+                    break;
+                }
+                body.push(lj);
                 j += 1;
             }
             if !body.is_empty() {
-                out.push(format!("> [!{}]", kw.to_uppercase()));
+                out.push(format!("{indent}> [!{}]", kw.to_uppercase()));
                 for b in body {
-                    out.push(format!("> {b}"));
+                    out.push(format!("{indent}> {}", b.trim_start()));
                 }
                 i = j;
                 continue;
             }
         }
-        out.push(lines[i].to_string());
+        out.push(line.to_string());
         i += 1;
     }
     out.join("\n")
@@ -95,6 +108,16 @@ fn strip_unit_preamble(body: &str) -> String {
         out.push(line);
     }
     out.join("\n").trim_start().to_string()
+}
+
+/// Whether a trimmed line begins a Markdown list item (`- `, `* `, `+ `, or `N. `).
+fn starts_list_item(trimmed: &str) -> bool {
+    matches!(trimmed.as_bytes().first(), Some(b'-' | b'*' | b'+'))
+        && trimmed[1..].starts_with(' ')
+        || trimmed
+            .split_once(". ")
+            .map(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
 }
 
 fn is_minutes_line(t: &str) -> bool {
@@ -172,7 +195,25 @@ mod tests {
     }
 
     #[test]
+    fn nested_alert_does_not_swallow_following_list_item() {
+        // Learn nests an alert under a list item and follows its body directly with the next list
+        // item (no blank line). The rewrap must stop at that marker, or the list collapses and the
+        // next item's indented image becomes a code block. (Regression: the SharePoint sharing unit.)
+        let url = "https://learn.microsoft.com/en-us/training/modules/m/1-x";
+        let md = "---\nuid: x\n---\nIntro.\n\n- **Item one**. Text.\n\n    Note\n\n    Note body.\n- **Item two**. Text.\n\n    ![alt](http://x/y.png)\n\n    Paragraph after the image.\n";
+        let x = unit_markdown_to_xhtml(md, url).unwrap();
+        // Both list items survive, the image renders as an image (not a code block), the note is
+        // a callout, and no raw markdown leaks.
+        assert_eq!(x.matches("<li>").count(), 2, "both list items kept: {x}");
+        assert!(x.contains("<img src=\"http://x/y.png\""), "image rendered: {x}");
+        assert!(!x.contains("<pre>"), "no code block: {x}");
+        assert!(!x.contains("![alt]"), "no raw markdown: {x}");
+        assert!(x.contains("<blockquote>") && x.contains("<strong>Note</strong>"));
+    }
+
+    #[test]
     fn empty_body_returns_none() {
         assert!(unit_markdown_to_xhtml("---\nuid: x\n---\n", "https://learn.microsoft.com/training/modules/m/1-x").is_none());
     }
 }
+

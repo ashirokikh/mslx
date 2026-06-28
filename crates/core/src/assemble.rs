@@ -473,7 +473,7 @@ pub async fn build_export_epub<F: Fetcher + Sync>(
     if input_is_module(input) {
         build_module_epub_auto(fetcher, index, input, locale, date_stamp, progress).await
     } else {
-        build_certification_epub(fetcher, index, input, locale, date_stamp, progress).await
+        build_certification_epub(fetcher, index, input, locale, date_stamp, progress, false).await
     }
 }
 
@@ -554,6 +554,9 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     locale: &str,
     date_stamp: &str,
     progress: &dyn Fn(&str),
+    // When true, source EVERY module by scraping Learn's markdown endpoint even if it's in the
+    // public GitHub index. Used to A/B the two sources for parser tuning; normal builds pass false.
+    force_scrape: bool,
 ) -> Result<Vec<u8>, ResolveError> {
     // A self-contained fixture book that exercises every element type, for checking rendering
     // across readers. No network needed, so it works in the browser too.
@@ -609,9 +612,15 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
         for module in &part.modules {
             let module_url = module.url.clone().unwrap_or_default();
             let slug = module_slug_from_url(&module_url);
-            let base = slug.as_deref().and_then(|s| index.module_raw_base(s));
-            // Not on GitHub but reachable on Learn -> scrape the rendered pages instead.
-            let scrape_base = if base.is_none() { scrapeable_base(&module_url) } else { None };
+            let github_base = slug.as_deref().and_then(|s| index.module_raw_base(s));
+            // Not on GitHub (or forced) but reachable on Learn -> scrape the markdown endpoint.
+            let scrape_base = if github_base.is_none() || force_scrape {
+                scrapeable_base(&module_url)
+            } else {
+                None
+            };
+            // When forcing the scrape, ignore the GitHub source for this module.
+            let base = if force_scrape && scrape_base.is_some() { None } else { github_base };
             modules_total += 1;
             if base.is_some() {
                 modules_with_source += 1;

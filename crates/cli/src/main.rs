@@ -139,6 +139,27 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Subcommand: `scrapebook <cert-url-or-uid> [out.epub]` - build a whole cert through the main
+    // flow but FORCE every module to be sourced from Learn's markdown endpoint (even public ones).
+    // For A/B-comparing the scrape against the GitHub-markdown build to tune the parser.
+    if pos.first().map(String::as_str) == Some("scrapebook") {
+        let input = pos
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("scrapebook: missing <cert-url-or-uid>"))?;
+        let out = pos.get(2).cloned().unwrap_or_else(|| "certification-scraped.epub".to_string());
+        let index = load_index(&fetcher).await?;
+        eprintln!("(indexed {} modules)", index.modules.len());
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let progress = |msg: &str| eprintln!("  {msg}");
+        let bytes = mslx_core::assemble::build_certification_epub(
+            &fetcher, &index, input, &locale, &date, &progress, true,
+        )
+        .await?;
+        std::fs::write(&out, &bytes)?;
+        eprintln!("wrote {out} ({} bytes)", bytes.len());
+        return Ok(());
+    }
+
     // Subcommand: `scrape <module-uid-or-url> [out.epub]` - POC: build a module EPUB by scraping
     // the rendered Learn unit pages (for modules whose Markdown is not on GitHub). No index needed.
     if pos.first().map(String::as_str) == Some("scrape") {

@@ -494,7 +494,14 @@ async fn scrape_unit_body<F: Fetcher>(
         // markdown_to_xhtml path as GitHub units (identical formatting).
         let md_url = format!("{url}?accept=text/markdown");
         if let Ok(md) = get_text_retrying(fetcher, &md_url).await {
+            // Detect a knowledge check by its question structure (a bare-"N." layout), not the
+            // is_kc flag - Learn's BC/Dynamics checks aren't tagged "knowledge-check". If found,
+            // render the quiz layout (bold question + option list) and link out to verify answers.
+            if let Some(xhtml) = crate::scrape::kc_markdown_to_xhtml(&md, url) {
+                return (with_kc_link(&xhtml, url), url.clone());
+            }
             if let Some(xhtml) = crate::scrape::unit_markdown_to_xhtml(&md, url) {
+                // A KC unit whose structure wasn't recognised still links out to the live check.
                 let body = if is_kc { with_kc_link(&xhtml, url) } else { xhtml };
                 return (body, url.clone());
             }

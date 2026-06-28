@@ -96,6 +96,80 @@ fn promote_standalone_images(html: &str) -> String {
     out
 }
 
+/// Format a scraped knowledge-check unit. The markdown endpoint returns each question as a bare
+/// `N.` line, then the question text, then the options as blank-separated paragraphs - so they
+/// render as undifferentiated text. (The correct answers and explanations live only in the YAML
+/// the GitHub path uses, which isn't available when scraping.) Reshape each question into a bold
+/// prompt followed by its options as a bullet list. Returns `None` if no `N.` question structure
+/// is present, so the caller falls back to the plain rendering.
+pub fn kc_markdown_to_xhtml(raw_md: &str, unit_url: &str) -> Option<String> {
+    let body = strip_unit_preamble(strip_frontmatter(raw_md));
+    let formatted = format_kc(&body)?;
+    let module_base = unit_url.rsplit_once('/').map(|(m, _)| m).unwrap_or(unit_url);
+    Some(markdown_to_xhtml_with_unit(&formatted, module_base, unit_url))
+}
+
+/// A line that is just a question number, e.g. `1.` or `12.`.
+fn kc_question_number(t: &str) -> Option<&str> {
+    let digits: &str = &t[..t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len())];
+    if !digits.is_empty() && digits.len() <= 2 && t[digits.len()..].trim() == "." {
+        Some(digits)
+    } else {
+        None
+    }
+}
+
+fn format_kc(body: &str) -> Option<String> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    // Pass through any intro (e.g. the "Answer the following questions" line) before question 1.
+    while i < lines.len() && kc_question_number(lines[i].trim()).is_none() {
+        if !lines[i].trim().is_empty() {
+            out.push_str(lines[i].trim());
+            out.push('\n');
+        }
+        i += 1;
+    }
+    let mut found = false;
+    while i < lines.len() {
+        let Some(num) = kc_question_number(lines[i].trim()) else {
+            i += 1;
+            continue;
+        };
+        found = true;
+        i += 1;
+        // The question is the next non-blank line.
+        while i < lines.len() && lines[i].trim().is_empty() {
+            i += 1;
+        }
+        let question = lines.get(i).map(|l| l.trim()).unwrap_or("");
+        i += 1;
+        out.push_str(&format!("\n**{num}. {question}**\n\n"));
+        // Options: blank-separated blocks until the next question number.
+        let mut opt = String::new();
+        while i < lines.len() && kc_question_number(lines[i].trim()).is_none() {
+            let t = lines[i].trim();
+            if t.is_empty() {
+                if !opt.is_empty() {
+                    out.push_str(&format!("- {opt}\n"));
+                    opt.clear();
+                }
+            } else {
+                if !opt.is_empty() {
+                    opt.push(' ');
+                }
+                opt.push_str(t);
+            }
+            i += 1;
+        }
+        if !opt.is_empty() {
+            out.push_str(&format!("- {opt}\n"));
+        }
+    }
+    found.then_some(out)
+}
+
 /// Learn's Markdown export flattens `> [!IMPORTANT]` alerts to a bare keyword line followed by the
 /// body, dropping the callout. Re-wrap a standalone alert keyword (`Note`/`Tip`/`Important`/
 /// `Warning`/`Caution`, blank-delimited) plus its following paragraph back into the GitHub
@@ -278,6 +352,23 @@ mod tests {
         assert!(!x.contains("<pre>"), "no code block: {x}");
         assert!(!x.contains("![alt]"), "no raw markdown: {x}");
         assert!(x.contains("<blockquote>") && x.contains("<strong>Note</strong>"));
+    }
+
+    #[test]
+    fn formats_knowledge_check_questions_and_options() {
+        let url = "https://learn.microsoft.com/en-us/training/modules/m/5-check";
+        let md = "---\nuid: x\n---\n# Check your knowledge\n\nCompleted\n\n- 4 minutes\n\n\
+                  ## Answer the following questions\n\n1.\nHow do you start it?\n\nOption A here.\n\n\
+                  Option B here.\n\n2.\nWhat about this?\n\nOption C.\n\nOption D.\n";
+        let x = kc_markdown_to_xhtml(md, url).unwrap();
+        // Each question is a bold prompt, each option a list item - not undifferentiated text.
+        assert!(x.contains("<strong>1. How do you start it?</strong>"), "{x}");
+        assert!(x.contains("<li>Option A here.</li>"), "{x}");
+        assert!(x.contains("<li>Option B here.</li>"), "{x}");
+        assert!(x.contains("<strong>2. What about this?</strong>"), "{x}");
+        assert!(x.contains("<li>Option C.</li>") && x.contains("<li>Option D.</li>"), "{x}");
+        // The bare "1." / "2." number lines must not survive as stray text.
+        assert!(!x.contains("<p>1.</p>") && !x.contains("<li>1.</li>"), "{x}");
     }
 
     #[test]

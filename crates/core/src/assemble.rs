@@ -807,7 +807,9 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
         .iter()
         .filter_map(|(g, module, unit)| {
             let (body, _, _) = results.get(g)?;
-            (body.contains("could not be fetched") || body.contains("not available for this unit"))
+            (body.contains("could not be fetched")
+                || body.contains("not available for this unit")
+                || body.contains("could not be scraped"))
                 .then(|| format!("{module} / {unit}"))
         })
         .collect();

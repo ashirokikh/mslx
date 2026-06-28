@@ -113,13 +113,18 @@ fn link_unembedded_images(body: &str) -> String {
         let tag = &after[..=end];
         let src = extract_tag_attr(tag, "src").unwrap_or_default();
         if src.starts_with("http") {
-            let alt = extract_tag_attr(tag, "alt").filter(|a| !a.is_empty());
-            let label = alt.as_deref().unwrap_or("View image on Microsoft Learn");
             out.push_str(&rest[..start]);
-            // src/alt come from the tag, so they're already XML-escaped - don't re-escape.
-            out.push_str(&format!(
-                "<p class=\"muted\">[Image: <a href=\"{src}\">{label}</a>]</p>"
-            ));
+            // A failed badge (some Learn achievement SVGs 404) is decorative - just drop it rather
+            // than leave a pointless "[Image: badge]" link. Content images degrade to a link.
+            let is_badge = extract_tag_attr(tag, "class").as_deref() == Some("badge");
+            if !is_badge {
+                let alt = extract_tag_attr(tag, "alt").filter(|a| !a.is_empty());
+                let label = alt.as_deref().unwrap_or("View image on Microsoft Learn");
+                // src/alt come from the tag, so they're already XML-escaped - don't re-escape.
+                out.push_str(&format!(
+                    "<p class=\"muted\">[Image: <a href=\"{src}\">{label}</a>]</p>"
+                ));
+            }
         } else {
             out.push_str(&rest[..start + tag.len()]);
         }

@@ -473,7 +473,17 @@ async fn scrape_unit_body<F: Fetcher>(
     slug: &str,
     is_kc: bool,
 ) -> (String, String) {
-    let candidates = [format!("{base}/{n}-{slug}"), format!("{base}/{slug}")];
+    // The page stem is usually `{n}-{slug}`, but some modules' unit uids already carry the number
+    // (e.g. Business Central's `1-data`), where the real stem is the bare slug and `{n}-{slug}`
+    // would be a doubled `1-1-data` -> 404. Try the likely-correct form first to avoid a wasted
+    // fetch (halves the requests for those modules).
+    let numbered = format!("{base}/{n}-{slug}");
+    let bare = format!("{base}/{slug}");
+    let candidates = if slug.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        [bare, numbered]
+    } else {
+        [numbered, bare]
+    };
     for url in &candidates {
         // Learn serves each unit's original authored Markdown here, so it runs through the same
         // markdown_to_xhtml path as GitHub units (identical formatting).

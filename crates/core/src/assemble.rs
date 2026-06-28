@@ -23,6 +23,15 @@ const FETCH_CONCURRENCY: usize = 12;
 /// a heavy burst (unlike GitHub-raw), so we trade some speed to keep scraped units from failing.
 const SCRAPE_CONCURRENCY: usize = 4;
 
+/// Concurrency for the image-embed pass. Lower than unit fetching: a big cert pulls ~150 images
+/// from raw.githubusercontent in one burst, which occasionally drops a connection at 12-wide.
+const IMAGE_CONCURRENCY: usize = 8;
+
+/// Fetch attempts before giving up, with exponential backoff between them (200ms..3.2s). High
+/// enough to ride out a transient GitHub-raw / Learn rate-limit window that a few-hundred-ms
+/// retry would miss, which otherwise leaves an unembedded (offline-broken) image or empty unit.
+const RETRY_ATTEMPTS: u32 = 6;
+
 /// The mslx project repo, linked from each book's provenance line.
 const MSLX_REPO: &str = "github.com/ashirokikh/mslx";
 
@@ -58,7 +67,7 @@ async fn embed_images<F: Fetcher + Sync>(fetcher: &F, chapters: &mut [Chapter]) 
                 };
                 (i, url, asset)
             })
-            .buffer_unordered(FETCH_CONCURRENCY)
+            .buffer_unordered(IMAGE_CONCURRENCY)
             .collect()
             .await;
     fetched.sort_by_key(|(i, _, _)| *i);
@@ -86,8 +95,46 @@ async fn embed_images<F: Fetcher + Sync>(fetcher: &F, chapters: &mut [Chapter]) 
                 .body
                 .replace(&format!("src=\"{url}\""), &format!("src=\"{file}\""));
         }
+        // Any image still pointing at a remote URL (fetch failed after all retries) would render
+        // as a broken square offline. Degrade it to a plain link so the page stays clean.
+        ch.body = link_unembedded_images(&ch.body);
     }
     resources
+}
+
+/// Replace any `<img ... src="http..." ...>` that survived the embed pass (its fetch failed) with
+/// a link, using the alt text as the label, so the export never shows a broken-image box.
+fn link_unembedded_images(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(start) = rest.find("<img ") {
+        let after = &rest[start..];
+        let Some(end) = after.find('>') else { break };
+        let tag = &after[..=end];
+        let src = extract_tag_attr(tag, "src").unwrap_or_default();
+        if src.starts_with("http") {
+            let alt = extract_tag_attr(tag, "alt").filter(|a| !a.is_empty());
+            let label = alt.as_deref().unwrap_or("View image on Microsoft Learn");
+            out.push_str(&rest[..start]);
+            // src/alt come from the tag, so they're already XML-escaped - don't re-escape.
+            out.push_str(&format!(
+                "<p class=\"muted\">[Image: <a href=\"{src}\">{label}</a>]</p>"
+            ));
+        } else {
+            out.push_str(&rest[..start + tag.len()]);
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Read a double-quoted attribute value out of an HTML tag string.
+fn extract_tag_attr(tag: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let i = tag.find(&needle)? + needle.len();
+    let end = tag[i..].find('"')?;
+    Some(tag[i..i + end].to_string())
 }
 
 fn is_svg_url(url: &str) -> bool {
@@ -1202,10 +1249,10 @@ fn is_bulk_unavailable(with_source: usize, total: usize) -> bool {
 /// whole unit rendering as "Content could not be fetched" for a transient blip.
 async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String, crate::FetchError> {
     let mut last = None;
-    for attempt in 0..4 {
-        // Back off before every retry (200ms, 400ms, 800ms). Immediate retries were useless
-        // against a brief GitHub-raw rate-limit/reset under the concurrent fetch burst - all
-        // three fired in the same instant and failed together, leaving a placeholder unit.
+    for attempt in 0..RETRY_ATTEMPTS {
+        // Back off before every retry (200ms..3.2s). Immediate retries were useless against a
+        // brief GitHub-raw rate-limit/reset under the concurrent fetch burst - they all fired in
+        // the same instant and failed together, leaving a placeholder unit or an unembedded image.
         if attempt > 0 {
             fetcher.sleep_ms(200u64 << (attempt - 1)).await;
         }
@@ -1221,7 +1268,7 @@ async fn get_text_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<String,
 /// `<img>` pointing at the remote URL, which fails offline (the whole point of the export).
 async fn get_bytes_retrying<F: Fetcher>(fetcher: &F, url: &str) -> Result<Vec<u8>, crate::FetchError> {
     let mut last = None;
-    for attempt in 0..4 {
+    for attempt in 0..RETRY_ATTEMPTS {
         if attempt > 0 {
             fetcher.sleep_ms(200u64 << (attempt - 1)).await;
         }
@@ -1477,6 +1524,17 @@ mod tests {
     }
 
     #[test]
+    fn unembedded_image_becomes_a_link() {
+        // A local (embedded) image is left alone; a surviving remote one degrades to a link.
+        let body = "<p><img class=\"content-img\" src=\"media/img0001.png\" alt=\"diagram\" /></p>\
+                    <p><img class=\"content-img\" src=\"https://raw/x.png\" alt=\"a screenshot\" /></p>";
+        let out = link_unembedded_images(body);
+        assert!(out.contains("src=\"media/img0001.png\""), "embedded image kept: {out}");
+        assert!(!out.contains("src=\"https://raw/x.png\""), "remote img tag gone: {out}");
+        assert!(out.contains("[Image: <a href=\"https://raw/x.png\">a screenshot</a>]"), "{out}");
+    }
+
+    #[test]
     fn retry_recovers_with_exponential_backoff() {
         // Two transient failures then success: the helper must return Ok and have slept twice
         // with growing delays (200ms, 400ms) - the SC-900 "could not be fetched" placeholders
@@ -1491,14 +1549,14 @@ mod tests {
     }
 
     #[test]
-    fn retry_gives_up_after_four_attempts() {
-        // Never-succeeding: 4 attempts -> 3 backoff sleeps (200, 400, 800), then Err.
+    fn retry_gives_up_after_all_attempts() {
+        // Never-succeeding: 6 attempts -> 5 backoff sleeps (200..3200), then Err.
         let f = FlakyFetcher {
             remaining_failures: std::sync::atomic::AtomicUsize::new(usize::MAX),
             sleeps: std::sync::Mutex::new(vec![]),
         };
         let r = futures::executor::block_on(get_text_retrying(&f, "https://example/x.md"));
         assert!(r.is_err());
-        assert_eq!(*f.sleeps.lock().unwrap(), vec![200, 400, 800]);
+        assert_eq!(*f.sleeps.lock().unwrap(), vec![200, 400, 800, 1600, 3200]);
     }
 }

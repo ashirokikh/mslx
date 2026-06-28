@@ -302,6 +302,10 @@ pub enum LearnInput {
     Exam(String),
     /// A single learning path, identified by its URL slug (`/training/paths/<slug>/`).
     Path(String),
+    /// An instructor-led course, identified by its base code (`mb-820` from `mb-820t00`). The
+    /// course carries the authoritative study guide for many certs/exams whose catalog entry is
+    /// empty (Business Central, etc.).
+    Course(String),
 }
 
 /// Classify a user input as a certification or an exam. Accepts page URLs, `certification.*`
@@ -327,6 +331,12 @@ pub fn parse_input(input: &str) -> Result<LearnInput, ResolveError> {
                 return Ok(LearnInput::Path(slug.to_string()));
             }
         }
+        // An instructor-led course: `/training/courses/<code>/` (e.g. mb-820t00).
+        if let Some(pos) = segs.iter().position(|&p| p == "courses") {
+            if let Some(slug) = segs.get(pos + 1) {
+                return Ok(LearnInput::Course(course_code(slug)));
+            }
+        }
         // Check exams first: `/certifications/exams/<code>/`.
         if let Some(pos) = segs.iter().position(|&p| p == "exams") {
             if let Some(code) = segs.get(pos + 1) {
@@ -344,11 +354,38 @@ pub fn parse_input(input: &str) -> Result<LearnInput, ResolveError> {
             "{s} is not a recognised certification or exam URL"
         )));
     }
-    // Bare token: an exam code (az-104, az104, AZ 500, ...) vs a cert slug.
+    // Bare token: a course code (`mb-820t00`) is checked first so it isn't mistaken for an exam.
+    if is_course_code(s) {
+        return Ok(LearnInput::Course(course_code(s)));
+    }
+    // Then an exam code (az-104, az104, AZ 500, ...) vs a cert slug.
     if let Some(code) = canonical_exam_code(s) {
         return Ok(LearnInput::Exam(format!("exam.{code}")));
     }
     Ok(LearnInput::Cert(format!("certification.{s}")))
+}
+
+/// Strip a course code's trailing `tNN` form-number (`mb-820t00` -> `mb-820`), so the base code
+/// can be passed to the course lookup (which scans `t00`/`t01`).
+fn course_code(slug: &str) -> String {
+    let lower = slug.to_lowercase();
+    if let Some(i) = lower.rfind('t') {
+        let after = &lower[i + 1..];
+        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
+            return lower[..i].to_string();
+        }
+    }
+    lower
+}
+
+/// Whether a bare token looks like a course code: a hyphenated code ending in `tNN` (`mb-820t00`).
+fn is_course_code(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.contains('-')
+        && lower.rfind('t').is_some_and(|i| {
+            let after = &lower[i + 1..];
+            !after.is_empty() && after.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// Canonicalize a bare exam code written in any common form - `AZ-500`, `az500`, `Az 500` -
@@ -537,7 +574,11 @@ async fn resolve_study_guide<F: Fetcher>(
         LearnInput::Exam(exam_uid) => {
             let exam = resolve_exam(fetcher, &exam_uid, locale).await?;
             if exam.path_uids.is_empty() {
-                return Err(ResolveError::NoPaths(exam_uid));
+                return Err(ResolveError::NoPaths(format!(
+                    "{exam_uid} has no learning paths in its study guide (it may be retired). \
+                     Try its course URL (learn.microsoft.com/training/courses/<code>t00) or a \
+                     specific learning-path URL instead."
+                )));
             }
             Ok(exam)
         }
@@ -565,6 +606,23 @@ async fn resolve_study_guide<F: Fetcher>(
                 identifier: lp.uid.clone(),
                 icon_url: lp.icon_url,
                 path_uids: vec![lp.uid],
+            })
+        }
+        LearnInput::Course(code) => {
+            // The course (`course.<code>t00`) carries the authoritative study guide - the right
+            // entry point for certs/exams whose own catalog study guide is empty (Business
+            // Central, retired exams, ...).
+            let (paths, title, icon) = course_study_guide(fetcher, &code, locale).await;
+            if paths.is_empty() {
+                return Err(ResolveError::NoPaths(format!(
+                    "course {code} (no learning paths in its study guide)"
+                )));
+            }
+            Ok(StudyGuide {
+                title: title.unwrap_or_else(|| format!("Course {code}")),
+                identifier: format!("course.{code}"),
+                icon_url: icon,
+                path_uids: paths,
             })
         }
     }
@@ -1354,6 +1412,20 @@ mod tests {
             .unwrap(),
             LearnInput::Cert("certification.azure-solutions-architect".into())
         );
+    }
+
+    #[test]
+    fn parses_course_url_and_code() {
+        // Course URL -> Course with the tNN-stripped base code.
+        assert_eq!(
+            parse_input("https://learn.microsoft.com/en-us/training/courses/mb-820t00").unwrap(),
+            LearnInput::Course("mb-820".into())
+        );
+        // Bare course code.
+        assert_eq!(parse_input("mb-820t00").unwrap(), LearnInput::Course("mb-820".into()));
+        // A plain exam code is NOT a course; a cert slug isn't either.
+        assert_eq!(parse_input("az-104").unwrap(), LearnInput::Exam("exam.az-104".into()));
+        assert!(matches!(parse_input("azure-network-engineer").unwrap(), LearnInput::Cert(_)));
     }
 
     #[test]

@@ -1175,6 +1175,8 @@ fn cover_body(book: &Book, date_stamp: &str) -> String {
         "Exam"
     } else if book.cert_uid.starts_with("certification.") {
         "Certification"
+    } else if book.cert_uid.starts_with("course.") {
+        "Course"
     } else {
         "Learning path"
     };
@@ -1499,6 +1501,7 @@ mod tests {
         assert!(cover_body(&book("certification.azure-fundamentals"), "2026-01-01")
             .contains("Certification:"));
         assert!(cover_body(&book("exam.ai-900"), "2026-01-01").contains("Exam:"));
+        assert!(cover_body(&book("course.mb-820"), "2026-01-01").contains("Course:"));
         assert!(cover_body(&book("learn.wwl.well-architected"), "2026-01-01")
             .contains("Learning path:"));
     }

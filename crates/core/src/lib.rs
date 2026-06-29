@@ -110,25 +110,7 @@ struct RawCourse {
     #[serde(default)]
     icon_url: Option<String>,
     #[serde(default)]
-    levels: Vec<String>,
-    #[serde(default)]
     study_guide: Vec<StudyItem>,
-}
-
-/// The Microsoft certification badge for a difficulty level. Catalog cert badges are just the
-/// generic level badge (beginner -> fundamentals, intermediate -> associate, advanced ->
-/// expert), so an exam with no linked cert can still show the same badge its cert page does
-/// instead of the generic course icon.
-fn cert_level_badge(levels: &[String]) -> Option<String> {
-    let level = match levels.first().map(String::as_str) {
-        Some("beginner") => "fundamentals",
-        Some("intermediate") => "associate",
-        Some("advanced") => "expert",
-        _ => return None,
-    };
-    Some(format!(
-        "https://learn.microsoft.com/en-us/media/learn/certification/badges/microsoft-certified-{level}-badge.svg"
-    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -775,10 +757,11 @@ async fn course_study_guide<F: Fetcher>(
             if let Some(course) = resp.courses.into_iter().find(|c| c.uid == uid) {
                 let paths = study_guide_paths(&course.study_guide);
                 if !paths.is_empty() {
-                    // Prefer the certification level badge (what the cert page shows) over the
-                    // generic course icon.
-                    let badge = cert_level_badge(&course.levels).or(course.icon_url);
-                    return (paths, course.title, badge);
+                    // Use the course's own icon. Do NOT derive a credential badge from the
+                    // course's difficulty `levels`: that is content difficulty, not the credential
+                    // level. mb-820 is an "advanced" course leading to an *associate* cert, so a
+                    // level-mapped badge would wrongly read "expert".
+                    return (paths, course.title, course.icon_url);
                 }
             }
         }
@@ -1433,11 +1416,52 @@ mod tests {
             parse_input("https://learn.microsoft.com/en-us/training/courses/mb-820t00").unwrap(),
             LearnInput::Course("mb-820".into())
         );
-        // Bare course code.
+        // Bare course code (with the tNN form number) -> Course.
         assert_eq!(parse_input("mb-820t00").unwrap(), LearnInput::Course("mb-820".into()));
+        // ...but a bare exam code WITHOUT the form number is an Exam, not a Course - so `mb-820`
+        // resolves through the exam path (its study guide comes from the course as a fallback).
+        assert_eq!(parse_input("mb-820").unwrap(), LearnInput::Exam("exam.mb-820".into()));
         // A plain exam code is NOT a course; a cert slug isn't either.
         assert_eq!(parse_input("az-104").unwrap(), LearnInput::Exam("exam.az-104".into()));
         assert!(matches!(parse_input("azure-network-engineer").unwrap(), LearnInput::Cert(_)));
+    }
+
+    // Regression (mb-820): an exam whose study guide is resolved via its instructor-led course
+    // must take the course's own icon for the cover badge, NOT a badge derived from the course's
+    // difficulty `levels`. mb-820 is an "advanced"-difficulty course leading to an *associate*
+    // certification; the old code mapped advanced -> "expert" and showed the wrong credential.
+    #[test]
+    fn advanced_course_badge_is_not_an_expert_credential() {
+        // A fetcher that returns one advanced-level course carrying a real study guide. The
+        // "levels" field is intentionally present (and "advanced") to prove it is ignored.
+        struct CourseFetcher;
+        #[async_trait::async_trait]
+        impl Fetcher for CourseFetcher {
+            async fn get_json(&self, _url: &str) -> Result<String, FetchError> {
+                Ok(r#"{"courses":[{"uid":"course.mb-820t00","title":"Course MB-820",
+                    "icon_url":"https://learn.microsoft.com/media/learn/certification/course.svg",
+                    "levels":["advanced"],
+                    "study_guide":[{"uid":"learn.wwl.mb-820-path","type":"learningPath"}]}]}"#
+                    .to_string())
+            }
+            async fn get_bytes(&self, _url: &str) -> Result<Vec<u8>, FetchError> {
+                Ok(vec![])
+            }
+            async fn sleep_ms(&self, _ms: u64) {}
+        }
+
+        let (paths, _title, icon) =
+            futures::executor::block_on(course_study_guide(&CourseFetcher, "exam.mb-820", "en-us"));
+        assert_eq!(paths, vec!["learn.wwl.mb-820-path".to_string()]);
+        let icon = icon.expect("a single-path course yields an icon");
+        assert!(
+            !icon.contains("expert"),
+            "an advanced course must not map to an expert credential badge, got: {icon}"
+        );
+        assert_eq!(
+            icon,
+            "https://learn.microsoft.com/media/learn/certification/course.svg"
+        );
     }
 
     #[test]

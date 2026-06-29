@@ -297,9 +297,10 @@ fn to_debug_json(book: &mslx_core::Book) -> String {
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let mut o = String::new();
     o.push_str(&format!(
-        "{{\"cert_uid\":\"{}\",\"title\":\"{}\",\"parts\":[",
+        "{{\"cert_uid\":\"{}\",\"title\":\"{}\",\"icon_url\":\"{}\",\"parts\":[",
         esc(&book.cert_uid),
-        esc(&book.title)
+        esc(&book.title),
+        esc(book.icon_url.as_deref().unwrap_or(""))
     ));
     for (pi, p) in book.parts.iter().enumerate() {
         if pi > 0 {

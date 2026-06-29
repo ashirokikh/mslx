@@ -36,10 +36,11 @@ compile to a **native binary** (using `reqwest`) and to **WebAssembly** (using t
   It has no accounts, no config phone-home, and **no telemetry**: nothing is sent anywhere except
   the public content requests it makes to build your book.
 - The **hosted browser version** runs this same engine as WebAssembly on your machine. It adds a
-  thin same-origin proxy (for the few resources that aren't CORS-enabled) and light usage
-  analytics to decide which exams to feature; what it does and does not collect is documented in
-  the [mslx-web](https://github.com/ashirokikh/mslx-web) repo. The book itself is always built
-  locally and never uploaded.
+  thin same-origin proxy (for the few resources that aren't CORS-enabled) and light, anonymous
+  usage analytics: which resource you exported (the cert/exam/path/course/module code), whether it
+  succeeded and how long it took, and any modules with no public source so they can be fixed. No
+  accounts, no personal data, no tracking cookies; the book itself is always built locally and
+  never uploaded.
 - It's all open source - read it, build it, or run the CLI and skip the website entirely.
 
 ## Install

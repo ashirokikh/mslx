@@ -86,6 +86,18 @@ Native `cargo build`/`test` cover `core` + `cli`; the wasm crate is built separa
 wasm-pack build crates/wasm --target web --out-dir pkg
 ```
 
+## Known limitations
+
+- **Credential badge for some bare exam/course codes.** A handful of certifications are not
+  linked to their exam or course in Microsoft's catalog API: their `exams` and `study_guide`
+  lists are empty and the exam has no catalog entry (for example `mb-820` and `pl-900`). Exporting
+  by the bare code still resolves the content (via the instructor-led course), but mslx cannot see
+  the owning certification, so the cover falls back to the generic course icon instead of the
+  credential badge (associate / fundamentals / expert). Workaround: paste the certification URL
+  instead of the bare code, e.g.
+  `https://learn.microsoft.com/credentials/certifications/d365-business-central-developer-associate/`
+  - the certification page carries the badge, so the cover then shows the correct one.
+
 ## Content and licensing
 
 The code is MIT licensed (see [LICENSE](./LICENSE)). Exported content is Microsoft's, published

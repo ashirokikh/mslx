@@ -686,18 +686,30 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
     // the end so the page can warn the user and log which parts were unavailable.
     let mut missing_modules: Vec<String> = Vec::new();
 
+    // A book with a single learning path (a path export, or a course/exam whose study guide is
+    // one path) would otherwise get a redundant "Part 1: <title>" wrapper that just repeats the
+    // cover and pushes every module one level deeper than a multi-path cert. Collapse it: lift the
+    // modules to the top level, so a module sits at the same TOC depth whether it came from a path
+    // or nests under a Part in a multi-path certification. (A single-module export already does the
+    // equivalent: its units sit at the top level rather than under a redundant module node.)
+    let single_part = book.parts.len() == 1;
     // Pass 1: walk the tree, build the structure + a flat list of fetch tasks (no IO yet).
     for (pi, part) in book.parts.iter().enumerate() {
         let part_file = format!("part{:02}.xhtml", pi + 1);
-        let part_label = format!("Part {}: {}", pi + 1, part.title);
-        chapters.push(Chapter {
-            id: format!("part{:02}", pi + 1),
-            filename: part_file.clone(),
-            title: part_label.clone(),
-            body: part_intro_body(pi + 1, part),
-            module_header: None,
-        });
-        let mut part_nav = NavEntry::leaf(part_file.clone(), part_label);
+        // None when collapsed (single-path book); Some(part nav node) otherwise.
+        let mut part_nav: Option<NavEntry> = if single_part {
+            None
+        } else {
+            let part_label = format!("Part {}: {}", pi + 1, part.title);
+            chapters.push(Chapter {
+                id: format!("part{:02}", pi + 1),
+                filename: part_file.clone(),
+                title: part_label.clone(),
+                body: part_intro_body(pi + 1, part),
+                module_header: None,
+            });
+            Some(NavEntry::leaf(part_file.clone(), part_label))
+        };
 
         for module in &part.modules {
             let module_url = module.url.clone().unwrap_or_default();
@@ -772,9 +784,15 @@ pub async fn build_certification_epub<F: Fetcher + Sync>(
             }
 
             module_nav.href = first_unit_file.unwrap_or_else(|| part_file.clone());
-            part_nav.children.push(module_nav);
+            // Nest under the Part, or (collapsed single-path book) lift the module to the top level.
+            match part_nav.as_mut() {
+                Some(pn) => pn.children.push(module_nav),
+                None => nav.push(module_nav),
+            }
         }
-        nav.push(part_nav);
+        if let Some(pn) = part_nav {
+            nav.push(pn);
+        }
     }
 
     // If the certification has little or no publicly-sourced content, don't fetch hundreds of
@@ -1194,15 +1212,22 @@ fn cover_body(book: &Book, date_stamp: &str) -> String {
     } else {
         "Learning path"
     };
+    let parts = book.parts.len();
+    // Only surface the learning-path ("parts") count when there's more than one: a single-path
+    // book collapses the Part level, so "1 parts" would be both ungrammatical and misleading.
+    let parts_seg = if parts > 1 {
+        format!("{parts} parts &#183; ")
+    } else {
+        String::new()
+    };
     badge_img(&book.icon_url)
         + &format!(
         "<p class=\"muted\">Microsoft Learn study export, assembled {date} for personal study. \
          Content is Microsoft's; original sources are listed at the end.</p>\n\
          <p><strong>{kind}:</strong> {title}</p>\n\
-         <p><strong>{parts} parts &#183; {modules} modules &#183; {units} units &#183; about {hours:.0} hours</strong></p>\n",
+         <p><strong>{parts_seg}{modules} modules &#183; {units} units &#183; about {hours:.0} hours</strong></p>\n",
         date = esc(date_stamp),
         title = esc(&book.title),
-        parts = book.parts.len(),
         modules = book.module_count(),
         units = book.unit_count(),
         hours = book.total_minutes() as f64 / 60.0,
